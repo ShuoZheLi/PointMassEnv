@@ -31,14 +31,19 @@ plt.imshow(grid, cmap='Greys', interpolation='none', extent=extent)
 
 
 
-# For demonstration, generate random trajectories
-# np.random.seed(0)
 
-traj = np.load('traj.npy')
-# plot the trajectory
-# for i in range(len(traj)):
+traj = np.load('traj.npy', allow_pickle=True)
+# plt.plot(traj[:,1], traj[:,0], color='purple', alpha=1)
 
-plt.plot(traj[:,1], traj[:,0], color='purple', alpha=1)
+# traj = traj[:,400:]
+# import pdb; pdb.set_trace()
+
+for i in range(traj.shape[0]):
+    num_points = traj[i].shape[0]
+    traj_init = traj[i]
+    for i in range(num_points - 1):
+        alpha = (num_points - i) / num_points
+        plt.plot(traj_init[i:i+2, 1], traj_init[i:i+2, 0], color='purple', alpha=alpha)
 
 
 plt.grid(color='gray', linestyle='-', linewidth=0.25)
@@ -46,16 +51,8 @@ plt.grid(color='gray', linestyle='-', linewidth=0.25)
 # change the size of the grid box to be 1x1
 plt.xticks(np.arange(0, 19, 1))
 plt.yticks(np.arange(0, 19, 1))
-
-# plt.xticks(np.arange(1, 19, 0.5))
-# plt.yticks(np.arange(1, 19, 0.5))
-# plt.xticks(np.arange(1, 19, 0.75))
-# plt.yticks(np.arange(1, 19, 0.75))
 plt.grid(True)
-# plt.gca().set_xticklabels([])
-# plt.gca().set_yticklabels([])
-# plt.gca().set_xticks([x - 0.75 for x in range(19)], minor=True)
-# plt.gca().set_yticks([y - 0.75 for y in range(19)], minor=True)
+
 
 
 # plt.axis('off')

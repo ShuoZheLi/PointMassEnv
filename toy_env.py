@@ -424,7 +424,7 @@ def get_random_offline_trajectory(start_pos, goal, traj_num):
                 # img = env.render()
                 # print(img)
                 if np.linalg.norm(sub_goal - obs) < 0.8:
-                    print('Success')
+                    # print('Success')
                     terminals.append(True)
                     # obs = env.reset()
                     action_noise -= 0.2
@@ -434,6 +434,8 @@ def get_random_offline_trajectory(start_pos, goal, traj_num):
         
         traj[traj_count] = np.array(traj[traj_count])
         traj_count += 1
+        print('Trajectory:', traj_count)
+        print('Observations num:', len(observations))
         
 
     observations = np.array(observations, dtype=np.float32)
@@ -458,7 +460,7 @@ def get_random_offline_trajectory(start_pos, goal, traj_num):
     # save the dataset
     np.save('toy_dataset.npy', dataset)
     np.save('traj.npy', traj)
-    import pdb; pdb.set_trace()
+    # import pdb; pdb.set_trace()
 
     
 
@@ -478,6 +480,6 @@ if __name__ == '__main__':
 
     # get_random_trajectory(start_pos, goal, 100)
 
-    get_random_offline_trajectory(start_pos, goal, 10)
+    get_random_offline_trajectory(start_pos, goal, 1000)
 
     

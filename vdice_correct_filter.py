@@ -18,9 +18,11 @@ import torch.nn.functional as F
 import wandb
 from torch.distributions import Normal
 from torch.optim.lr_scheduler import CosineAnnealingLR
-import suboptimal_offline_datasets
+# import suboptimal_offline_datasets
 from torch import autograd
 from utils import TwinQ, ValueFunction, GaussianPolicy, DeterministicPolicy, ReplayBuffer, MLP, TwinV, soft_update, set_seed, compute_mean_std, eval_actor, return_reward_range, modify_reward, normalize_states, wrap_env
+from toy_env import PointMassEnv, WALLS
+
 
 TensorBatch = List[torch.Tensor]
 
@@ -364,16 +366,16 @@ class VDICE:
         # policy_loss = torch.mean(a_weight * bc_losses)
         # policy_loss = torch.sum(flags.squeeze() * bc_losses) / torch.sum(flags.squeeze() == 1)
 
-        flags = flags.squeeze()
-        log_dict["vdice_train/semi_a_sim"] = (((a_weight * flags) > 0).sum() / (a_weight > 0).sum()).item()
-        log_dict["vdice_train/semi_s_sim"] = (((s_weight * flags) > 0).sum() / (s_weight > 0).sum()).item()
-        log_dict["vdice_train/semi_sa_sim"] = (((semi_sa_weight * flags) > 0).sum() / (semi_sa_weight > 0).sum()).item()
-        log_dict["vdice_train/true_sa_sim"] = (((true_sa_weight * flags) > 0).sum() / (true_sa_weight > 0).sum()).item()
+        # flags = flags.squeeze()
+        # log_dict["vdice_train/semi_a_sim"] = (((a_weight * flags) > 0).sum() / (a_weight > 0).sum()).item()
+        # log_dict["vdice_train/semi_s_sim"] = (((s_weight * flags) > 0).sum() / (s_weight > 0).sum()).item()
+        # log_dict["vdice_train/semi_sa_sim"] = (((semi_sa_weight * flags) > 0).sum() / (semi_sa_weight > 0).sum()).item()
+        # log_dict["vdice_train/true_sa_sim"] = (((true_sa_weight * flags) > 0).sum() / (true_sa_weight > 0).sum()).item()
 
-        log_dict["vdice_train/semi_a_num"] = (((a_weight * flags) > 0).sum()).item()
-        log_dict["vdice_train/semi_s_num"] = (((s_weight * flags) > 0).sum()).item()
-        log_dict["vdice_train/semi_sa_num"] = (((semi_sa_weight * flags) > 0).sum()).item()
-        log_dict["vdice_train/true_sa_num"] = (((true_sa_weight * flags) > 0).sum()).item()
+        # log_dict["vdice_train/semi_a_num"] = (((a_weight * flags) > 0).sum()).item()
+        # log_dict["vdice_train/semi_s_num"] = (((s_weight * flags) > 0).sum()).item()
+        # log_dict["vdice_train/semi_sa_num"] = (((semi_sa_weight * flags) > 0).sum()).item()
+        # log_dict["vdice_train/true_sa_num"] = (((true_sa_weight * flags) > 0).sum()).item()
 
         # log_dict["actor_loss"] = policy_loss.item()
         log_dict["vdice_train/s_weight"] = s_weight.mean().item()
@@ -390,14 +392,17 @@ class VDICE:
 
     def train(self, batch: TensorBatch) -> Dict[str, float]:
         self.total_it += 1
+
         (
             observations,
             actions,
             rewards,
             next_observations,
             dones,
-            flags,
+            # flags,
         ) = batch
+        flags = torch.ones_like(rewards)
+        
         log_dict = {}
 
         rewards = rewards.squeeze(dim=-1)
@@ -832,8 +837,11 @@ def create_dataset(config: TrainConfig):
     start_pos = [[15, 3]]
     goal = [[4.5, 15.5]]
     env = PointMassEnv(start=np.array(start_pos[0], dtype=np.float32), action_noise=0)
-    
-    return dataset, expert_num, state_dim, action_dim, env
+    dataset = np.load("toy_dataset.npy", allow_pickle=True).item()
+    state_dim = env.observation_space.shape[0]
+    action_dim = env.action_space.shape[0]
+
+    return dataset, state_dim, action_dim, env
 
 def create_eval_dataset(dataset):
 
@@ -969,13 +977,13 @@ def bc_policy(config, ids, bc_dataset):
 
 @pyrallis.wrap()
 def train(config: TrainConfig):
-    dataset, expert_num, state_dim, action_dim, env = create_dataset(config)
+    dataset, state_dim, action_dim, env = create_dataset(config)
 
-    bc_dataset = copy.deepcopy(dataset)
+    # bc_dataset = copy.deepcopy(dataset)
 
 
-    if config.normalize_reward:
-        modify_reward(dataset, config.env_1)
+    # if config.normalize_reward:
+    #     modify_reward(dataset, config.env_1)
 
     if config.normalize:
         state_mean, state_std = compute_mean_std(dataset["observations"], eps=1e-3)
@@ -988,7 +996,7 @@ def train(config: TrainConfig):
     dataset["next_observations"] = normalize_states(
         dataset["next_observations"], state_mean, state_std
     )
-    env = wrap_env(env, state_mean=state_mean, state_std=state_std)
+    # env = wrap_env(env, state_mean=state_mean, state_std=state_std)
 
     replay_buffer = ReplayBuffer(
         state_dim,
@@ -1004,206 +1012,220 @@ def train(config: TrainConfig):
 
 
     wandb_init(asdict(config))
-    f_100_exp_dataset, f_100_rand_dataset, l_100_exp_dataset, l_100_rand_dataset = create_eval_dataset(dataset)
+    # f_100_exp_dataset, f_100_rand_dataset, l_100_exp_dataset, l_100_rand_dataset = create_eval_dataset(dataset)
     evaluations = []
     t = 0
 
+    # import pdb; pdb.set_trace()
 
-    need_init = True
-    if config.load_semi_model != None and config.load_id_dataset != None:
-        policy_file = Path(config.load_semi_model)
-        semi_trainer.load_state_dict(torch.load(policy_file))
-        t = semi_trainer.total_it
-        semi_trainer = trainer_init(config, env)
-        ids = np.load(config.load_id_dataset)
-        # if id in ids, then keep the data, otherwise remove
-        preload_filter = np.isin(dataset["id"], ids)
-        dataset = {
-            'observations': dataset['observations'][preload_filter],
-            'actions': dataset['actions'][preload_filter],
-            'next_observations': dataset['next_observations'][preload_filter],
-            'rewards': dataset['rewards'][preload_filter],
-            'terminals': dataset['terminals'][preload_filter],
-            'task_horizon': dataset['task_horizon'][preload_filter],
-            'expert': dataset['expert'][preload_filter],
-            'id': dataset['id'][preload_filter],
-            }
-        replay_buffer = ReplayBuffer(
-            state_dim,
-            action_dim,
-            config.buffer_size,
-            config.device,
-        )
-        replay_buffer.load_d4rl_dataset(dataset)
-        f_100_exp_dataset, f_100_rand_dataset, l_100_exp_dataset, l_100_rand_dataset = create_eval_dataset(dataset)
-        need_init = False
-        bc_policy(config, dataset['id'], bc_dataset)
+
+    # need_init = True
+    # if config.load_semi_model != None and config.load_id_dataset != None:
+    #     policy_file = Path(config.load_semi_model)
+    #     semi_trainer.load_state_dict(torch.load(policy_file))
+    #     t = semi_trainer.total_it
+    #     semi_trainer = trainer_init(config, env)
+    #     ids = np.load(config.load_id_dataset)
+    #     # if id in ids, then keep the data, otherwise remove
+    #     preload_filter = np.isin(dataset["id"], ids)
+    #     dataset = {
+    #         'observations': dataset['observations'][preload_filter],
+    #         'actions': dataset['actions'][preload_filter],
+    #         'next_observations': dataset['next_observations'][preload_filter],
+    #         'rewards': dataset['rewards'][preload_filter],
+    #         'terminals': dataset['terminals'][preload_filter],
+    #         'task_horizon': dataset['task_horizon'][preload_filter],
+    #         'expert': dataset['expert'][preload_filter],
+    #         'id': dataset['id'][preload_filter],
+    #         }
+    #     replay_buffer = ReplayBuffer(
+    #         state_dim,
+    #         action_dim,
+    #         config.buffer_size,
+    #         config.device,
+    #     )
+    #     replay_buffer.load_d4rl_dataset(dataset)
+    #     f_100_exp_dataset, f_100_rand_dataset, l_100_exp_dataset, l_100_rand_dataset = create_eval_dataset(dataset)
+    #     need_init = False
+    #     bc_policy(config, dataset['id'], bc_dataset)
 
 
 
     while t < int(config.max_timesteps):
         
-        if (((t % 1e6) % config.update_freq) == 0 and t > 1e6) or (t % 1e6 == 0 and t > 0 and t < 1e6 + 1) and need_init:
-            a_weights, s_weights, semi_v = semidice_result_no_vtarget(dataset, semi_trainer, config)
+        # if (((t % 1e6) % config.update_freq) == 0 and t > 1e6) or (t % 1e6 == 0 and t > 0 and t < 1e6 + 1) and need_init:
+        #     a_weights, s_weights, semi_v = semidice_result_no_vtarget(dataset, semi_trainer, config)
 
-            if config.policy_ratio:
-                preload_filter = a_weights > 0
-            elif config.state_ratio:
-                preload_filter = s_weights > 0
-            elif config.or_ration:
-                preload_filter = np.logical_or(a_weights > 0, s_weights > 0)
-            elif config.and_ratio:
-                preload_filter = np.logical_and(a_weights > 0, s_weights > 0)
+        #     if config.policy_ratio:
+        #         preload_filter = a_weights > 0
+        #     elif config.state_ratio:
+        #         preload_filter = s_weights > 0
+        #     elif config.or_ration:
+        #         preload_filter = np.logical_or(a_weights > 0, s_weights > 0)
+        #     elif config.and_ratio:
+        #         preload_filter = np.logical_and(a_weights > 0, s_weights > 0)
 
-            dataset = {
-                'observations': dataset['observations'][preload_filter],
-                'actions': dataset['actions'][preload_filter],
-                'next_observations': dataset['next_observations'][preload_filter],
-                'rewards': dataset['rewards'][preload_filter],
-                'terminals': dataset['terminals'][preload_filter],
-                'task_horizon': dataset['task_horizon'][preload_filter],
-                'expert': dataset['expert'][preload_filter],
-                'id': dataset['id'][preload_filter],
-                }
-            replay_buffer = ReplayBuffer(
-                state_dim,
-                action_dim,
-                config.buffer_size,
-                config.device,
-            )
-            replay_buffer.load_d4rl_dataset(dataset)
-            f_100_exp_dataset, f_100_rand_dataset, l_100_exp_dataset, l_100_rand_dataset = create_eval_dataset(dataset)
-            config.vdice_type = "semi"
-            config.vdice_lambda = semi_trainer.vdice_lambda + config.semi_lambda_delta
-            # config.semi_lambda_delta = config.semi_lambda_delta * 0.25
-            semi_trainer = trainer_init(config, env)
+        #     dataset = {
+        #         'observations': dataset['observations'][preload_filter],
+        #         'actions': dataset['actions'][preload_filter],
+        #         'next_observations': dataset['next_observations'][preload_filter],
+        #         'rewards': dataset['rewards'][preload_filter],
+        #         'terminals': dataset['terminals'][preload_filter],
+        #         'task_horizon': dataset['task_horizon'][preload_filter],
+        #         'expert': dataset['expert'][preload_filter],
+        #         'id': dataset['id'][preload_filter],
+        #         }
+        #     replay_buffer = ReplayBuffer(
+        #         state_dim,
+        #         action_dim,
+        #         config.buffer_size,
+        #         config.device,
+        #     )
+        #     replay_buffer.load_d4rl_dataset(dataset)
+        #     f_100_exp_dataset, f_100_rand_dataset, l_100_exp_dataset, l_100_rand_dataset = create_eval_dataset(dataset)
+        #     config.vdice_type = "semi"
+        #     config.vdice_lambda = semi_trainer.vdice_lambda + config.semi_lambda_delta
+        #     # config.semi_lambda_delta = config.semi_lambda_delta * 0.25
+        #     semi_trainer = trainer_init(config, env)
 
-            bc_policy(config, dataset['id'], bc_dataset)
+        #     bc_policy(config, dataset['id'], bc_dataset)
 
-        need_init = True
+        # need_init = True
 
         batch = replay_buffer.sample(config.batch_size)
         batch = [b.to(config.device) for b in batch]
         semi_log_dict = semi_trainer.train(batch)
         semi_log_dict["vdice_step"] = t
+
+        a_weights, s_weights, semi_v = semidice_result_no_vtarget(dataset, semi_trainer, config)
+        action_ratio_filter = a_weights > 0
+        state_ratio_filter = s_weights > 0
+        or_ratio_filter = np.logical_or(a_weights > 0, s_weights > 0)
+
+        semi_log_dict["filter/size of action ratio filter: "] = action_ratio_filter.sum()
+        semi_log_dict["filter/size of state ratio filter: "] = state_ratio_filter.sum()
+        semi_log_dict["filter/size of or ratio filter: "] = or_ratio_filter.sum()
+
         wandb.log(semi_log_dict,)
+        # print("t: ", t)
+
         # Evaluate episode
-        if (t + 1) % config.eval_freq == 0:
+        # if (t + 1) % config.eval_freq == 0:
             
-            a_weights_exp, s_weights_exp, semi_v_exp = semidice_result_no_vtarget(f_100_exp_dataset, semi_trainer, config)
-            a_weights_rand, s_weights_rand, semi_v_rand = semidice_result_no_vtarget(f_100_rand_dataset, semi_trainer, config)
-            a_weights_l_100_exp, s_weights_l_100_exp, semi_l_100_v_exp = semidice_result_no_vtarget(l_100_exp_dataset, semi_trainer, config)
-            a_weights_l_100_rand, s_weights_l_100_rand, semi_l_100_v_rand = semidice_result_no_vtarget(l_100_rand_dataset, semi_trainer, config)
-            a_weights, s_weights, semi_v = semidice_result_no_vtarget(dataset, semi_trainer, config)
+        #     a_weights_exp, s_weights_exp, semi_v_exp = semidice_result_no_vtarget(f_100_exp_dataset, semi_trainer, config)
+        #     a_weights_rand, s_weights_rand, semi_v_rand = semidice_result_no_vtarget(f_100_rand_dataset, semi_trainer, config)
+        #     a_weights_l_100_exp, s_weights_l_100_exp, semi_l_100_v_exp = semidice_result_no_vtarget(l_100_exp_dataset, semi_trainer, config)
+        #     a_weights_l_100_rand, s_weights_l_100_rand, semi_l_100_v_rand = semidice_result_no_vtarget(l_100_rand_dataset, semi_trainer, config)
+        #     a_weights, s_weights, semi_v = semidice_result_no_vtarget(dataset, semi_trainer, config)
 
-            if config.policy_ratio:
-                preload_filter = a_weights > 0
-            elif config.state_ratio:
-                preload_filter = s_weights > 0
-            elif config.or_ration:
-                preload_filter = np.logical_or(a_weights > 0, s_weights > 0)
-            elif config.and_ratio:
-                preload_filter = np.logical_and(a_weights > 0, s_weights > 0)
+        #     if config.policy_ratio:
+        #         preload_filter = a_weights > 0
+        #     elif config.state_ratio:
+        #         preload_filter = s_weights > 0
+        #     elif config.or_ration:
+        #         preload_filter = np.logical_or(a_weights > 0, s_weights > 0)
+        #     elif config.and_ratio:
+        #         preload_filter = np.logical_and(a_weights > 0, s_weights > 0)
 
-            filter_size = preload_filter.sum()
-            expert_in_filter = dataset["expert"][np.logical_and(preload_filter, dataset["expert"])].sum()
-            expert_in_filter_f100 = dataset["expert"][np.logical_and(dataset["task_horizon"] < 100, np.logical_and(preload_filter, dataset["expert"]))].sum()
-            random_in_filter = filter_size - expert_in_filter
+        #     filter_size = preload_filter.sum()
+        #     expert_in_filter = dataset["expert"][np.logical_and(preload_filter, dataset["expert"])].sum()
+        #     expert_in_filter_f100 = dataset["expert"][np.logical_and(dataset["task_horizon"] < 100, np.logical_and(preload_filter, dataset["expert"]))].sum()
+        #     random_in_filter = filter_size - expert_in_filter
 
-            expert_in_filter_f25 = dataset["expert"][np.logical_and(dataset["task_horizon"] < 25, np.logical_and(preload_filter, dataset["expert"]))].sum()
-            random_in_filter_f25 = np.logical_and(dataset["task_horizon"] < 25, np.logical_and(preload_filter, dataset["expert"] == False)).sum()
+        #     expert_in_filter_f25 = dataset["expert"][np.logical_and(dataset["task_horizon"] < 25, np.logical_and(preload_filter, dataset["expert"]))].sum()
+        #     random_in_filter_f25 = np.logical_and(dataset["task_horizon"] < 25, np.logical_and(preload_filter, dataset["expert"] == False)).sum()
 
-            print("==========================================================")
-            print("==========================================================")
-            print("Semi F100 Expert Action Weights: ", a_weights_exp.mean())
-            print("Semi F100 Expert Action Weights Std: ", a_weights_exp.std())
-            print("Semi F100 Expert State Weights: ", s_weights_exp.mean())
-            print("Semi F100 Expert State Weights Std: ", s_weights_exp.std())
-            print("Semi F100 Expert V: ", semi_v_exp.mean())
+        #     print("==========================================================")
+        #     print("==========================================================")
+        #     print("Semi F100 Expert Action Weights: ", a_weights_exp.mean())
+        #     print("Semi F100 Expert Action Weights Std: ", a_weights_exp.std())
+        #     print("Semi F100 Expert State Weights: ", s_weights_exp.mean())
+        #     print("Semi F100 Expert State Weights Std: ", s_weights_exp.std())
+        #     print("Semi F100 Expert V: ", semi_v_exp.mean())
 
-            print("Semi F100 Random Action Weights: ", a_weights_rand.mean())
-            print("Semi F100 Random Action Weights Std: ", a_weights_rand.std())
-            print("Semi F100 Random State Weights: ", s_weights_rand.mean())
-            print("Semi F100 Random State Weights Std: ", s_weights_rand.std())
-            print("Semi F100 Random V: ", semi_v_rand.mean())
-
-
-            print("Semi L100 Expert Action Weights: ", a_weights_l_100_exp.mean())
-            print("Semi L100 Expert Action Weights Std: ", a_weights_l_100_exp.std())
-            print("Semi L100 Expert State Weights: ", s_weights_l_100_exp.mean())
-            print("Semi L100 Expert State Weights Std: ", s_weights_l_100_exp.std())
-            print("Semi L100 Expert V: ", semi_l_100_v_exp.mean())
+        #     print("Semi F100 Random Action Weights: ", a_weights_rand.mean())
+        #     print("Semi F100 Random Action Weights Std: ", a_weights_rand.std())
+        #     print("Semi F100 Random State Weights: ", s_weights_rand.mean())
+        #     print("Semi F100 Random State Weights Std: ", s_weights_rand.std())
+        #     print("Semi F100 Random V: ", semi_v_rand.mean())
 
 
-            print("Semi L100 Random Action Weights: ", a_weights_l_100_rand.mean())
-            print("Semi L100 Random Action Weights Std: ", a_weights_l_100_rand.std())
-            print("Semi L100 Random State Weights: ", s_weights_l_100_rand.mean())
-            print("Semi L100 Random State Weights Std: ", s_weights_l_100_rand.std())
-            print("Semi L100 Random V: ", semi_l_100_v_rand.mean())
+        #     print("Semi L100 Expert Action Weights: ", a_weights_l_100_exp.mean())
+        #     print("Semi L100 Expert Action Weights Std: ", a_weights_l_100_exp.std())
+        #     print("Semi L100 Expert State Weights: ", s_weights_l_100_exp.mean())
+        #     print("Semi L100 Expert State Weights Std: ", s_weights_l_100_exp.std())
+        #     print("Semi L100 Expert V: ", semi_l_100_v_exp.mean())
 
 
-            print("Semi Dataset Action Weights: ", a_weights.mean())
-            print("Semi Dataset Action Weights Std: ", a_weights.std())
-            print("Semi Dataset State Weights: ", s_weights.mean())
-            print("Semi Dataset State Weights Std: ", s_weights.std())
-            print("Semi Dataset V: ", semi_v.mean())
+        #     print("Semi L100 Random Action Weights: ", a_weights_l_100_rand.mean())
+        #     print("Semi L100 Random Action Weights Std: ", a_weights_l_100_rand.std())
+        #     print("Semi L100 Random State Weights: ", s_weights_l_100_rand.mean())
+        #     print("Semi L100 Random State Weights Std: ", s_weights_l_100_rand.std())
+        #     print("Semi L100 Random V: ", semi_l_100_v_rand.mean())
 
 
-            print("Num Filter Size: ", filter_size)
-            print("Num Expert in Filter: ", expert_in_filter)
-            print("Num F100 Expert in Filter: ", expert_in_filter_f100)
-            print("Num Random in Filter: ", random_in_filter)
-            print("Num F25 Expert in Filter: ", expert_in_filter_f25)
-            print("Num F25 Random in Filter: ", random_in_filter_f25)
+        #     print("Semi Dataset Action Weights: ", a_weights.mean())
+        #     print("Semi Dataset Action Weights Std: ", a_weights.std())
+        #     print("Semi Dataset State Weights: ", s_weights.mean())
+        #     print("Semi Dataset State Weights Std: ", s_weights.std())
+        #     print("Semi Dataset V: ", semi_v.mean())
+
+
+        #     print("Num Filter Size: ", filter_size)
+        #     print("Num Expert in Filter: ", expert_in_filter)
+        #     print("Num F100 Expert in Filter: ", expert_in_filter_f100)
+        #     print("Num Random in Filter: ", random_in_filter)
+        #     print("Num F25 Expert in Filter: ", expert_in_filter_f25)
+        #     print("Num F25 Random in Filter: ", random_in_filter_f25)
 
 
 
-            wandb.log(
-                {
-                    "vdice_train/Semi F100 Expert Action Weights: ": a_weights_exp.mean(),
-                    "vdice_train/Semi F100 Expert Action Weights Std: ": a_weights_exp.std(),
-                    "vdice_train/Semi F100 Expert State Weights: ": s_weights_exp.mean(),
-                    "vdice_train/Semi F100 Expert State Weights Std: ": s_weights_exp.std(),
-                    "vdice_train/Semi F100 Expert V: ": semi_v_exp.mean(),
+        #     wandb.log(
+        #         {
+        #             "vdice_train/Semi F100 Expert Action Weights: ": a_weights_exp.mean(),
+        #             "vdice_train/Semi F100 Expert Action Weights Std: ": a_weights_exp.std(),
+        #             "vdice_train/Semi F100 Expert State Weights: ": s_weights_exp.mean(),
+        #             "vdice_train/Semi F100 Expert State Weights Std: ": s_weights_exp.std(),
+        #             "vdice_train/Semi F100 Expert V: ": semi_v_exp.mean(),
 
-                    "vdice_train/Semi F100 Random Action Weights: ": a_weights_rand.mean(),
-                    "vdice_train/Semi F100 Random Action Weights Std: ": a_weights_rand.std(),
-                    "vdice_train/Semi F100 Random State Weights: ": s_weights_rand.mean(),
-                    "vdice_train/Semi F100 Random State Weights Std: ": s_weights_rand.std(),
-                    "vdice_train/Semi F100 Random V: ": semi_v_rand.mean(),
-
-
-                    "vdice_train/Semi L100 Expert Action Weights: ": a_weights_l_100_exp.mean(),
-                    "vdice_train/Semi L100 Expert Action Weights Std: ": a_weights_l_100_exp.std(),
-                    "vdice_train/Semi L100 Expert State Weights: ": s_weights_l_100_exp.mean(),
-                    "vdice_train/Semi L100 Expert State Weights Std: ": s_weights_l_100_exp.std(),
-                    "vdice_train/Semi L100 Expert V: ": semi_l_100_v_exp.mean(),
+        #             "vdice_train/Semi F100 Random Action Weights: ": a_weights_rand.mean(),
+        #             "vdice_train/Semi F100 Random Action Weights Std: ": a_weights_rand.std(),
+        #             "vdice_train/Semi F100 Random State Weights: ": s_weights_rand.mean(),
+        #             "vdice_train/Semi F100 Random State Weights Std: ": s_weights_rand.std(),
+        #             "vdice_train/Semi F100 Random V: ": semi_v_rand.mean(),
 
 
-                    "vdice_train/Semi L100 Random Action Weights: ": a_weights_l_100_rand.mean(),
-                    "vdice_train/Semi L100 Random Action Weights Std: ": a_weights_l_100_rand.std(),
-                    "vdice_train/Semi L100 Random State Weights: ": s_weights_l_100_rand.mean(),
-                    "vdice_train/Semi L100 Random State Weights Std: ": s_weights_l_100_rand.std(),
-                    "vdice_train/Semi L100 Random V: ": semi_l_100_v_rand.mean(),
+        #             "vdice_train/Semi L100 Expert Action Weights: ": a_weights_l_100_exp.mean(),
+        #             "vdice_train/Semi L100 Expert Action Weights Std: ": a_weights_l_100_exp.std(),
+        #             "vdice_train/Semi L100 Expert State Weights: ": s_weights_l_100_exp.mean(),
+        #             "vdice_train/Semi L100 Expert State Weights Std: ": s_weights_l_100_exp.std(),
+        #             "vdice_train/Semi L100 Expert V: ": semi_l_100_v_exp.mean(),
 
 
-                    "vdice_train/Semi Dataset Action Weights: ": a_weights.mean(),
-                    "vdice_train/Semi Dataset Action Weights Std: ": a_weights.std(),
-                    "vdice_train/Semi Dataset State Weights: ": s_weights.mean(),
-                    "vdice_train/Semi Dataset State Weights Std: ": s_weights.std(),
-                    "vdice_train/Semi Dataset V: ": semi_v.mean(),
+        #             "vdice_train/Semi L100 Random Action Weights: ": a_weights_l_100_rand.mean(),
+        #             "vdice_train/Semi L100 Random Action Weights Std: ": a_weights_l_100_rand.std(),
+        #             "vdice_train/Semi L100 Random State Weights: ": s_weights_l_100_rand.mean(),
+        #             "vdice_train/Semi L100 Random State Weights Std: ": s_weights_l_100_rand.std(),
+        #             "vdice_train/Semi L100 Random V: ": semi_l_100_v_rand.mean(),
+
+
+        #             "vdice_train/Semi Dataset Action Weights: ": a_weights.mean(),
+        #             "vdice_train/Semi Dataset Action Weights Std: ": a_weights.std(),
+        #             "vdice_train/Semi Dataset State Weights: ": s_weights.mean(),
+        #             "vdice_train/Semi Dataset State Weights Std: ": s_weights.std(),
+        #             "vdice_train/Semi Dataset V: ": semi_v.mean(),
                     
 
-                    "vdice_train/Num Filter Size": filter_size,
-                    "vdice_train/Num Expert in Filter": expert_in_filter,
-                    "vdice_train/Num F100 Expert in Filter": expert_in_filter_f100,
-                    "vdice_train/Num Random in Filter": random_in_filter,
-                    "vdice_train/Semi Lambda": config.vdice_lambda,
-                    "vdice_train/Num F25 Expert in Filter": expert_in_filter_f25,
-                    "vdice_train/Num F25 Random in Filter": random_in_filter_f25,
-                    "vdice_step": t,
-                    },
-            )
+        #             "vdice_train/Num Filter Size": filter_size,
+        #             "vdice_train/Num Expert in Filter": expert_in_filter,
+        #             "vdice_train/Num F100 Expert in Filter": expert_in_filter_f100,
+        #             "vdice_train/Num Random in Filter": random_in_filter,
+        #             "vdice_train/Semi Lambda": config.vdice_lambda,
+        #             "vdice_train/Num F25 Expert in Filter": expert_in_filter_f25,
+        #             "vdice_train/Num F25 Random in Filter": random_in_filter_f25,
+        #             "vdice_step": t,
+        #             },
+        #     )
 
             
 
@@ -1217,7 +1239,7 @@ def train(config: TrainConfig):
                     os.path.join(config.checkpoints_path+"_semi", f"checkpoint_{t}.pt"),
                 )
                 # save dataset id
-                np.save(os.path.join(config.checkpoints_path+"_id", f"checkpoint_{t}.npy"), dataset["id"][preload_filter])
+                # np.save(os.path.join(config.checkpoints_path+"_id", f"checkpoint_{t}.npy"), dataset["id"][preload_filter])
 
         t += 1
 

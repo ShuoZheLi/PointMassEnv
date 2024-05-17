@@ -163,7 +163,7 @@ class ReplayBuffer:
         self._rewards[:n_transitions] = self._to_tensor(data["rewards"][..., None])
         self._next_states[:n_transitions] = self._to_tensor(data["next_observations"])
         self._dones[:n_transitions] = self._to_tensor(data["terminals"][..., None])
-        self._experts[:n_transitions] = self._to_tensor(data["expert"][..., None])
+        # self._experts[:n_transitions] = self._to_tensor(data["expert"][..., None])
         self._size += n_transitions
         self._pointer = min(self._size, n_transitions)
 
@@ -176,8 +176,9 @@ class ReplayBuffer:
         rewards = self._rewards[indices]
         next_states = self._next_states[indices]
         dones = self._dones[indices]
-        experts = self._experts[indices]
-        return [states, actions, rewards, next_states, dones, experts]
+        # experts = self._experts[indices]
+        # return [states, actions, rewards, next_states, dones, experts]
+        return [states, actions, rewards, next_states, dones,]
 
     def add_transition(self):
         # Use this method to add new data into the replay buffer during fine-tuning.
