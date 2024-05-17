@@ -151,3 +151,4 @@ assets/
 # custom
 **.pt**
 **.yaml**
+**.npy**

@@ -38,7 +38,7 @@ DEFAULT_DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 class TrainConfig:
     # Experiment
     eval_freq: int = int(5e3)  # How often (time steps) we evaluate
-    save_freq: int = int(5e3)  # How often (time steps) save the model
+    save_freq: int = int(1e3)  # How often (time steps) save the model
     update_freq: int = int(1.5e5)  # How often (time steps) we update the model
     n_episodes: int = 10  # How many episodes run during evaluation
     max_timesteps: int = int(6e6)  # Max time steps to run environment
@@ -747,7 +747,11 @@ def trainer_init(config: TrainConfig, env):
         print(f"Checkpoints path: {config.checkpoints_path}")
         os.makedirs(config.checkpoints_path, exist_ok=True)
         os.makedirs(config.checkpoints_path+"_semi", exist_ok=True)
-        os.makedirs(config.checkpoints_path+"_id", exist_ok=True)
+        os.makedirs(config.checkpoints_path+"_or_ratio_id", exist_ok=True)
+        os.makedirs(config.checkpoints_path+"_and_ratio_id", exist_ok=True)
+        os.makedirs(config.checkpoints_path+"_action_ratio_id", exist_ok=True)
+        os.makedirs(config.checkpoints_path+"_state_ratio_id", exist_ok=True)
+
 
         with open(os.path.join(config.checkpoints_path, "config.yaml"), "w") as f:
             pyrallis.dump(config, f)
@@ -840,6 +844,7 @@ def create_dataset(config: TrainConfig):
     dataset = np.load("toy_dataset.npy", allow_pickle=True).item()
     state_dim = env.observation_space.shape[0]
     action_dim = env.action_space.shape[0]
+    dataset["id"] = np.arange(dataset["actions"].shape[0])
 
     return dataset, state_dim, action_dim, env
 
@@ -1097,14 +1102,7 @@ def train(config: TrainConfig):
         semi_log_dict = semi_trainer.train(batch)
         semi_log_dict["vdice_step"] = t
 
-        a_weights, s_weights, semi_v = semidice_result_no_vtarget(dataset, semi_trainer, config)
-        action_ratio_filter = a_weights > 0
-        state_ratio_filter = s_weights > 0
-        or_ratio_filter = np.logical_or(a_weights > 0, s_weights > 0)
-
-        semi_log_dict["filter/size of action ratio filter: "] = action_ratio_filter.sum()
-        semi_log_dict["filter/size of state ratio filter: "] = state_ratio_filter.sum()
-        semi_log_dict["filter/size of or ratio filter: "] = or_ratio_filter.sum()
+        
 
         wandb.log(semi_log_dict,)
         # print("t: ", t)
@@ -1238,9 +1236,25 @@ def train(config: TrainConfig):
                     semi_trainer.state_dict(),
                     os.path.join(config.checkpoints_path+"_semi", f"checkpoint_{t}.pt"),
                 )
-                # save dataset id
-                # np.save(os.path.join(config.checkpoints_path+"_id", f"checkpoint_{t}.npy"), dataset["id"][preload_filter])
 
+                a_weights, s_weights, semi_v = semidice_result_no_vtarget(dataset, semi_trainer, config)
+                action_ratio_filter = a_weights > 0
+                state_ratio_filter = s_weights > 0
+                or_ratio_filter = np.logical_or(a_weights > 0, s_weights > 0)
+                and_ratio_filter = np.logical_and(a_weights > 0, s_weights > 0)
+
+                log_dict = {}
+                log_dict["filter/size of action ratio filter: "] = action_ratio_filter.sum()
+                log_dict["filter/size of state ratio filter: "] = state_ratio_filter.sum()
+                log_dict["filter/size of or ratio filter: "] = or_ratio_filter.sum()
+                log_dict["filter/size of and ratio filter: "] = and_ratio_filter.sum()
+                wandb.log(log_dict)
+
+                # save dataset id
+                np.save(os.path.join(config.checkpoints_path+"_action_ratio_id", f"checkpoint_{t}.npy"), dataset["id"][action_ratio_filter])
+                np.save(os.path.join(config.checkpoints_path+"_state_ratio_id", f"checkpoint_{t}.npy"), dataset["id"][state_ratio_filter])
+                np.save(os.path.join(config.checkpoints_path+"_or_ratio_id", f"checkpoint_{t}.npy"), dataset["id"][or_ratio_filter])
+                np.save(os.path.join(config.checkpoints_path+"_and_ratio_id", f"checkpoint_{t}.npy"), dataset["id"][and_ratio_filter])
         t += 1
 
 
