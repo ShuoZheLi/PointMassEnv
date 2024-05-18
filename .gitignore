@@ -147,6 +147,7 @@ dmypy.json
 wandb
 assets/
 .pkl
+.npy
 
 # custom
 **.pt**

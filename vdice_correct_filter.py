@@ -65,8 +65,8 @@ class TrainConfig:
     # Wandb logging
     # project: str = "hm_odice"
     project: str = "test_hopper"
-    env_1: str = "hopper-expert-v2"  # OpenAI gym environment name
-    env_2: str = "hopper-random-v2"  # OpenAI gym environment name
+    env_1: str = "antmaze-umaze-v2"  # OpenAI gym environment name
+    env_2: str = "antmaze-umaze-v2"  # OpenAI gym environment name
     # env: str = "hopper-medium-v2"  # OpenAI gym environment name
     # group: str = "VDICE-D4RL"
     seed: int = 100
@@ -90,7 +90,8 @@ class TrainConfig:
     # load_true_dice: Optional[str] = "/robodata/corl/iql_reverse_kl_preload_value/algorithms/dice/own_dataset_trueDice_hopper-random-expert-0_1/100_0_95_hopper-random-expert-0_1-v2/100_0st-hopper-random-expert-0.1-v2-80df24f5/checkpoint_999999.pt"
     # load_vdice: Optional[str] = "/robodata/corl/iql_reverse_kl_preload_value/algorithms/dice/truedice_combine_vdice/100_0_5_truedice_combine_vdice/100_0st-hopper-random-expert-0.1-v2-3e32d6f2/checkpoint_999999.pt"
 
-    semi_vdice_lambda: float = 0.5
+    semi_vdice_lambda: float = 0.55
+    # semi_vdice_lambda: float = 0.4237
     true_vdice_lambda: float = 0.99
 
     semi_lambda_delta: float = 0
@@ -110,6 +111,7 @@ class TrainConfig:
 
     expert_num: int = 1e5
     layernorm: bool = False
+    hidden_dim: int = 256
     
 
     def __post_init__(self):
@@ -763,11 +765,11 @@ def trainer_init(config: TrainConfig, env):
     actor = GaussianPolicy(
         state_dim, action_dim, max_action, dropout=config.actor_dropout
     ).to(config.device)
-    true_v_network = ValueFunction(state_dim, layernorm=config.layernorm).to(config.device)
-    semi_v_network = ValueFunction(state_dim, layernorm=config.layernorm).to(config.device)
-    q_network = TwinQ(state_dim, action_dim, layernorm=config.layernorm).to(config.device)
-    mu_network = ValueFunction(state_dim, layernorm=config.layernorm).to(config.device)
-    U_network = ValueFunction(state_dim, layernorm=config.layernorm).to(config.device)
+    true_v_network = ValueFunction(state_dim, layernorm=config.layernorm, hidden_dim=config.hidden_dim).to(config.device)
+    semi_v_network = ValueFunction(state_dim, layernorm=config.layernorm, hidden_dim=config.hidden_dim).to(config.device)
+    q_network = TwinQ(state_dim, action_dim, layernorm=config.layernorm, hidden_dim=config.hidden_dim).to(config.device)
+    mu_network = ValueFunction(state_dim, layernorm=config.layernorm, hidden_dim=config.hidden_dim).to(config.device)
+    U_network = ValueFunction(state_dim, layernorm=config.layernorm, hidden_dim=config.hidden_dim).to(config.device)
 
     actor_optimizer = torch.optim.Adam(actor.parameters(), lr=config.actor_lr)
     true_v_optimizer = torch.optim.Adam(true_v_network.parameters(), lr=config.vf_lr)
@@ -809,6 +811,20 @@ def trainer_init(config: TrainConfig, env):
     trainer = VDICE(**kwargs)
     return trainer
 
+def change_reward(dataset):
+    terminals = dataset["terminals"]
+    rewards = dataset["rewards"]
+
+    for i in range(len(terminals)):
+        if terminals[i]:
+            rewards[i] = 1
+        else:
+            rewards[i] = 0
+
+    dataset["rewards"] = rewards
+    return dataset
+
+
 def create_dataset(config: TrainConfig):
     # env = gym.make(config.env_1)
 
@@ -845,6 +861,8 @@ def create_dataset(config: TrainConfig):
     state_dim = env.observation_space.shape[0]
     action_dim = env.action_space.shape[0]
     dataset["id"] = np.arange(dataset["actions"].shape[0])
+
+    dataset = change_reward(dataset)
 
     return dataset, state_dim, action_dim, env
 
