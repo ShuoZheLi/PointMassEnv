@@ -18,9 +18,9 @@ def get_random_offline_trajectory(start_pos, goal, traj_num):
         traj.append([])
 
         for i in range(len(start_pos)):
-            env = PointMassEnv(start=np.array(start_pos[i], dtype=np.float32),)
-            env.goal = np.array(goal[-1], dtype=np.float32)
-            obs = env.reset()
+            env = PointMassEnv(start=np.array(start_pos[i], dtype=np.float32), goal_radius=0.8)
+            env._goal = np.array(goal[-1], dtype=np.float32)
+            obs, _ = env.reset()
             # img = env.render()
             sub_goal = np.array(goal[i], dtype=np.float32)
             # observations.append(obs)
@@ -34,20 +34,16 @@ def get_random_offline_trajectory(start_pos, goal, traj_num):
                 action = vec / np.linalg.norm(vec) / 4
                 action = np.random.normal(action, action_noise)
                 actions.append(action)
-                obs, reward, _, _ = env.step(action)
+                obs, reward, term, trunc, info = env.step(action)
                 rewards.append(reward)
                 # print('reward:', reward)
                 # observations.append(obs)
                 # img = env.render()
                 # print(img)
-                if np.linalg.norm(sub_goal - obs) < 0.8:
-                    # print('Success')
-                    terminals.append(True)
-                    # obs = env.reset()
-                    action_noise -= 0.2
+                terminals.append(term)
+                if term:
                     reached_sub_goal = True
-                else:
-                    terminals.append(False)
+                    print("epi length:", len(traj[traj_count]))
         
         traj[traj_count] = np.array(traj[traj_count])
         traj_count += 1

@@ -1,8 +1,10 @@
-import gym
+import gymnasium as gym
 import numpy as np
 import pygame
 import sys
 import matplotlib.pyplot as plt
+from typing import Union, Optional
+from gymnasium.spaces import Space
 
 WALLS = {
         'FourRooms':
@@ -15,7 +17,7 @@ WALLS = {
                     [1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,1],
                     [1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,1], 
                     [1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,1],
-                    [1,1,1,1,0,1,1,1,1,1,1,1,0,1,1,1,1], 
+                    [1,1,1,1,0,1,1,1,1,1,1,1,0,1,1,1,1], ## tunnel
                     [1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,1],
                     [1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,1],
                     [1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,1],
@@ -63,17 +65,20 @@ def resize_walls(walls, factor):
     return walls
 
 
-class PointMassEnv(gym.Env):
+# class PointMassEnv(gym.Env):
+class PointMassEnv(gym.Env[np.ndarray, Union[int, np.ndarray]]):
     """Class for 2D navigation in PointMass environment."""
 
     def __init__(self,
                 env_name='FourRooms',
                 start=None,
+                goal=None,
                 resize_factor=1,
                 action_noise=0,
                 start_bounds=None,
                 num_substeps=50,
                 goal_radius=0.8,
+                episode_length=100,
                 ):
         """
         Args:
@@ -96,6 +101,8 @@ class PointMassEnv(gym.Env):
         self._width = width
         self._num_substeps = num_substeps
         self._goal_radius = goal_radius
+        self._episode_length = episode_length
+        self.render_mode = 'rgb_array'
 
         ## start position
         if start_bounds is not None:
@@ -123,7 +130,11 @@ class PointMassEnv(gym.Env):
             self._start = np.array(start, dtype=np.float32)
             assert self._is_valid_state(self._start)
 
-        self.goal = np.array([0,0], dtype=np.float32)
+        if goal is None:
+            self._goal = None
+        else:
+            self._goal = np.array(goal, dtype=np.float32)
+            assert self._is_valid_state(self._goal)
 
         self.reset()
 
@@ -131,25 +142,36 @@ class PointMassEnv(gym.Env):
     ######## main api ########
     ##########################
 
-    def reset(self, reset_args=None):
-        self.state = reset_args or self._sample_start_state()
-        return self._get_obs()
+    def reset(self, 
+              reset_state=None, 
+              seed=0,
+              options: Optional[dict] = None,):
+        super().reset(seed=seed)
+        if reset_state is not None:
+            self.state = reset_state
+        else:
+            self.state = self._start
+        self.epi_length = 0
+        return self._get_obs(), {}
     
-    def render(self):
-        i, j = self._discretize_state(self.state)
-        img = self._walls.copy()
-        img[i, j] = 2
-        return img
+    # def render(self):
+    #     i, j = self._discretize_state(self.state)
+    #     img = self._walls.copy()
+    #     img[i, j] = 2
+    #     return img
     
     def reward(self, state):
-        max_dist = np.linalg.norm(self._start - self.goal)
-        reward = (max_dist - np.linalg.norm(state - self.goal)) / max_dist
+        max_dist = np.linalg.norm(self._start - self._goal)
+        reward = (max_dist - np.linalg.norm(state - self._goal)) / max_dist
+        if self.check_success(state):
+            reward += 10
         return reward
     
     def check_success(self, state):
-        return np.linalg.norm(state - self.goal) < self._goal_radius
+        return np.linalg.norm(state - self._goal) < self._goal_radius
 
     def step(self, action):
+        self.epi_length += 1
         action = np.array(action, dtype=np.float32)
 
         ## apply noise
@@ -167,9 +189,12 @@ class PointMassEnv(gym.Env):
 
         # TODO: we can give penalty for hitting the wall (valid = False)
         reward = self.reward(self.state)
-        term = self.check_success(self.state)
+        term = trunc = self.check_success(self.state) or self.epi_length >= self._episode_length
 
-        return self._get_obs(), reward, term, {}
+        return self._get_obs(), reward, term, trunc, {'success': self.check_success(self.state), 'valid': valid}
+
+    def render(self):
+        return self.get_env_frame(self.state, self._goal)
 
     ##########################
     #### helper functions ####
@@ -257,39 +282,45 @@ class PointMassEnv(gym.Env):
 
         return False
     
-def get_env_frame(pos, goal):
-    # Define the array
-    grid = WALLS['FourRooms']
+    ##########################
+    ###### better render #####
+    ##########################
+    def get_env_frame(self, pos, goal):
 
+        # Create the plot
+        plt.figure(figsize=(8, 8))
+        extent = [0, self._walls.shape[1], 0, self._walls.shape[0]]
+        plt.imshow(self._walls, cmap='Greys', interpolation='none', extent=extent)
 
-    # Create the plot
-    plt.figure(figsize=(8, 8))
-    extent = [0, grid.shape[1], 0, grid.shape[0]]
-    plt.imshow(grid, cmap='Greys', interpolation='none', extent=extent)
+        plt.scatter(pos[1], pos[0], color='blue', s=100)
+        plt.scatter(goal[1], goal[0], color='red', s=100)
+        
 
-    plt.scatter(goal[1], goal[0], color='red', s=100)
-    plt.scatter(pos[1], pos[0], color='blue', s=100)
+        plt.grid(color='gray', linestyle='-', linewidth=0.25)
 
-    plt.grid(color='gray', linestyle='-', linewidth=0.25)
+        # change the size of the grid box to be 1x1
+        plt.xticks(np.arange(0, 17, 1))
+        plt.yticks(np.arange(0, 17, 1))
+        plt.grid(True)
 
-    # change the size of the grid box to be 1x1
-    plt.xticks(np.arange(0, 17, 1))
-    plt.yticks(np.arange(0, 17, 1))
-    plt.grid(True)
+        # plt.axis('off')
+        plt.title('Four-room')
+        plt.gca().invert_yaxis()
+        fig = plt.gcf()
+        fig.canvas.draw()
+        # convert canvas to image using numpy
+        img = np.fromstring(fig.canvas.tostring_rgb(), dtype=np.uint8, sep='')
+        img = img.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+        img = np.fliplr(img)
+        img = np.rot90(img)
 
+        plt.figure().clear()
+        plt.figure().clf()
+        plt.close()
+        plt.cla()
+        plt.clf()
 
-
-    # plt.axis('off')
-    plt.title('Four-room')
-    plt.gca().invert_yaxis()
-
-
-    fig = plt.gcf()
-    fig.canvas.draw()
-    # convert canvas to image using numpy
-    img = np.fromstring(fig.canvas.tostring_rgb(), dtype=np.uint8, sep='')
-    img = img.reshape(fig.canvas.get_width_height()[::-1] + (3,))
-    return img
+        return img
 
 if __name__ == '__main__':
     pygame.init()
@@ -297,14 +328,14 @@ if __name__ == '__main__':
     # Set up the display
     width, height = 800, 800
     screen = pygame.display.set_mode((width, height))
-    pygame.display.set_caption('Image Movement Game')
+    pygame.display.set_caption('PointMassEnv Game')
     
     start_pos = [[12.5, 4.5]]
     goal = [[4.5, 12.5]]
 
     env = PointMassEnv(start=np.array(start_pos[0], dtype=np.float32),)
-    env.goal = np.array(goal[-1], dtype=np.float32)
-    obs = env.reset()
+    env._goal = np.array(goal[-1], dtype=np.float32)
+    obs, _ = env.reset()
     
 
     # Game loop
@@ -314,16 +345,10 @@ if __name__ == '__main__':
             if event.type == pygame.QUIT:
                 running = False
 
-        
-
-        img = get_env_frame(obs, env.goal)
-        img = np.fliplr(img)
-        img = np.rot90(img)
+        img = env.get_env_frame(obs, env._goal)
         img_surface = pygame.surfarray.make_surface(img)
         screen.blit(img_surface, (0, 0))
         pygame.display.flip()
-
-        # Cap the frame rate
         pygame.time.Clock().tick(30)
 
         action = [0, 0]
@@ -337,8 +362,8 @@ if __name__ == '__main__':
             action = [-0.5, 0]  # Move the image up
         if keys[pygame.K_DOWN]:
             action = [0.5, 0]  # Move the image down
-        obs, reward, term, info = env.step(action)
-        # print('reward:', reward)
+        obs, reward, term, trunc, info = env.step(action)
+        print('reward:', reward)
         # print('term:', term)
 
     # Quit Pygame
