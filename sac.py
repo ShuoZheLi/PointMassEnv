@@ -156,23 +156,20 @@ def eval_policy(actor):
         episode_length = 0
         done = False
         obs, _ = env.reset()
-        images.append(np.transpose(env.render()))
+        images.append(np.moveaxis(np.transpose(env.render()), 0, -1))
         while not done:
             with torch.no_grad():
                 action, _, _ = actor.get_action(torch.Tensor([obs]).to(device))
             obs, reward, done, trunc, info = env.step(action[0].cpu().numpy())
-            images.append(np.transpose(env.render()))
+            images.append(np.moveaxis(np.transpose(env.render()), 0, -1))
             episode_return += reward
             episode_length += 1
             if done and info["success"]:
                 count_success += 1
                 
-
-    
-    # print(f"Success rate: {count_success / 10.0}")
     # save images into gif
     imageio.mimsave(f"eval_policy.gif", images, fps=10)
-    exit()
+    print(f"Success rate: {count_success / 10.0}")
     return episode_return, episode_length
 
 if __name__ == "__main__":
