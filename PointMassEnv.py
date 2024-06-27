@@ -5,6 +5,7 @@ import sys
 import matplotlib.pyplot as plt
 from typing import Union, Optional
 from gymnasium.spaces import Space
+from PIL import Image, ImageDraw
 
 WALLS = {
         'FourRooms':
@@ -165,6 +166,13 @@ class PointMassEnv(gym.Env[np.ndarray, Union[int, np.ndarray]]):
         reward = (max_dist - np.linalg.norm(state - self._goal)) / max_dist
         if self.check_success(state):
             reward += 10
+
+        # reward = 0
+        # if self.check_success(state):
+        #     reward = 1
+
+        # reward = - np.linalg.norm(state - self._goal)
+
         return reward
     
     def check_success(self, state):
@@ -285,7 +293,7 @@ class PointMassEnv(gym.Env[np.ndarray, Union[int, np.ndarray]]):
     ##########################
     ###### better render #####
     ##########################
-    def get_env_frame(self, pos, goal):
+    def get_env_frame_2(self, pos, goal):
 
         # Create the plot
         plt.figure(figsize=(8, 8))
@@ -321,6 +329,41 @@ class PointMassEnv(gym.Env[np.ndarray, Union[int, np.ndarray]]):
         plt.clf()
 
         return img
+
+    def get_env_frame(self, pos, goal, save_path='env_frame.png'):
+        
+        pos = pos - 0.5
+        goal = goal - 0.5
+
+        # Create a blank image with white background
+        img = Image.new('RGB', (self._walls.shape[1] * 10, self._walls.shape[0] * 10), (255, 255, 255))
+        draw = ImageDraw.Draw(img)
+
+        # Draw walls
+        for y in range(self._walls.shape[0]):
+            for x in range(self._walls.shape[1]):
+                if self._walls[y, x] == 1:
+                    draw.rectangle([x * 10, y * 10, (x + 1) * 10, (y + 1) * 10], fill='black')
+
+        # Draw position and goal
+        draw.ellipse([(pos[1] * 10, pos[0] * 10), (pos[1] * 10 + 10, pos[0] * 10 + 10)], fill='blue', width=0.25)
+        draw.ellipse([(goal[1] * 10, goal[0] * 10), (goal[1] * 10 + 10, goal[0] * 10 + 10)], fill='red', width=0.25)
+
+        # Draw grid
+        for x in range(0, self._walls.shape[1] * 10, 10):
+            draw.line([(x, 0), (x, self._walls.shape[0] * 10)], fill='gray', width=1)
+        for y in range(0, self._walls.shape[0] * 10, 10):
+            draw.line([(0, y), (self._walls.shape[1] * 10, y)], fill='gray', width=1)
+
+        # Save the image
+        # img.save(save_path)
+
+        img = img.resize((800, 800), Image.LANCZOS)
+
+        # Convert PIL image to numpy array
+        img_array = np.array(img)
+        img_array = np.moveaxis(np.transpose(img_array), 0, -1)
+        return img_array
 
 if __name__ == '__main__':
     pygame.init()
