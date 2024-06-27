@@ -79,7 +79,7 @@ class PointMassEnv(gym.Env[np.ndarray, Union[int, np.ndarray]]):
                 start_bounds=None,
                 num_substeps=50,
                 goal_radius=0.8,
-                episode_length=100,
+                episode_length=60,
                 ):
         """
         Args:
@@ -165,7 +165,7 @@ class PointMassEnv(gym.Env[np.ndarray, Union[int, np.ndarray]]):
         max_dist = np.linalg.norm(self._start - self._goal)
         reward = (max_dist - np.linalg.norm(state - self._goal)) / max_dist
         if self.check_success(state):
-            reward += 10
+            reward = 10
 
         # reward = 0
         # if self.check_success(state):
@@ -380,7 +380,7 @@ if __name__ == '__main__':
     env._goal = np.array(goal[-1], dtype=np.float32)
     obs, _ = env.reset()
     
-
+    step_num = 0
     # Game loop
     running = True
     while running:
@@ -407,6 +407,8 @@ if __name__ == '__main__':
             action = [0.5, 0]  # Move the image down
         obs, reward, term, trunc, info = env.step(action)
         print('reward:', reward)
+        print('step_num:', step_num)
+        step_num+=1
         # print('term:', term)
 
     # Quit Pygame

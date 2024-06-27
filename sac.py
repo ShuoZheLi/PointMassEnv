@@ -144,11 +144,12 @@ class Actor(nn.Module):
         return action, log_prob, mean
 
 
-def eval_policy(actor):
+def eval_policy(actor, global_step, gif_dir):
     env = PointMassEnv(start=np.array([12.5, 4.5], dtype=np.float32), 
                                goal=np.array([4.5, 12.5], dtype=np.float32), 
                                goal_radius=0.8)
     
+    actor.eval()
     images = []
     count_success = 0
     for i in range(1):
@@ -159,17 +160,18 @@ def eval_policy(actor):
         images.append(np.moveaxis(np.transpose(env.render()), 0, -1))
         while not done:
             with torch.no_grad():
-                action, _, _ = actor.get_action(torch.Tensor([obs]).to(device))
-            obs, reward, done, trunc, info = env.step(action[0].cpu().numpy())
+                action, log_prob, mean = actor.get_action(torch.Tensor([obs]).to(device))
+            obs, reward, done, trunc, info = env.step(mean[0].cpu().numpy())
             images.append(np.moveaxis(np.transpose(env.render()), 0, -1))
             episode_return += reward
             episode_length += 1
             if done and info["success"]:
                 count_success += 1
-                
+    
+    actor.train()
     # save images into gif
-    imageio.mimsave(f"eval_policy.gif", images, fps=10)
-    print(f"Success rate: {count_success / 10.0}")
+    imageio.mimsave(gif_dir + "/" +str(global_step) + ".gif", images, fps=10)
+    print(f"Success rate: {count_success / 1.0}")
     return episode_return, episode_length
 
 if __name__ == "__main__":
@@ -197,6 +199,7 @@ poetry run pip install "stable_baselines3==2.0.0a1"
             save_code=True,
         )
     writer = SummaryWriter(f"runs/{run_name}")
+    gif_dir = f"runs/{run_name}"
     writer.add_text(
         "hyperparameters",
         "|param|value|\n|-|-|\n%s" % ("\n".join([f"|{key}|{value}|" for key, value in vars(args).items()])),
@@ -342,7 +345,8 @@ poetry run pip install "stable_baselines3==2.0.0a1"
                 if args.autotune:
                     writer.add_scalar("losses/alpha_loss", alpha_loss.item(), global_step)
 
-                eval_policy(actor)
+        if global_step % 50000 == 0:
+            eval_policy(actor, global_step, gif_dir)
                 
 
     envs.close()
