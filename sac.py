@@ -63,6 +63,7 @@ class Args:
     """Entropy regularization coefficient."""
     autotune: bool = True
     """automatic tuning of the entropy coefficient"""
+    save_model: bool = False
 
 
 def make_env(env_id, seed, idx, capture_video, run_name):
@@ -142,6 +143,12 @@ class Actor(nn.Module):
         log_prob = log_prob.sum(1, keepdim=True)
         mean = torch.tanh(mean) * self.action_scale + self.action_bias
         return action, log_prob, mean
+    
+    def save(self, model_dir):
+        torch.save(self.state_dict(), model_dir)
+
+    def load(self, model_dir):
+        self.load_state_dict(torch.load(model_dir))
 
 
 def eval_policy(actor, global_step, gif_dir):
@@ -199,7 +206,10 @@ poetry run pip install "stable_baselines3==2.0.0a1"
             save_code=True,
         )
     writer = SummaryWriter(f"runs/{run_name}")
-    gif_dir = f"runs/{run_name}"
+    gif_dir = f"runs/{run_name}/gifs/"
+    model_dir = f"runs/{run_name}/models/"
+    os.makedirs(gif_dir, exist_ok=True)
+    os.makedirs(model_dir, exist_ok=True)
     writer.add_text(
         "hyperparameters",
         "|param|value|\n|-|-|\n%s" % ("\n".join([f"|{key}|{value}|" for key, value in vars(args).items()])),
@@ -345,8 +355,11 @@ poetry run pip install "stable_baselines3==2.0.0a1"
                 if args.autotune:
                     writer.add_scalar("losses/alpha_loss", alpha_loss.item(), global_step)
 
-        if global_step % 50000 == 0:
+        if global_step % 10000 == 0:
             eval_policy(actor, global_step, gif_dir)
+            if args.save_model:
+                actor.save(model_dir + "/"+str(global_step)+"_actor.pth")
+
                 
 
     envs.close()
