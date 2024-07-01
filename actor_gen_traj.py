@@ -6,6 +6,9 @@ import gymnasium as gym
 import os
 import random
 from typing import Optional
+import pickle 
+
+
 
 def make_env():
     def thunk():
@@ -48,12 +51,13 @@ def gen_traj(actor, env, device, traj_dir, traj_num, transition_num):
         done = False
         obs, _ = env.reset()
         traj[-1].append(obs)
-        images.append(np.moveaxis(np.transpose(env.render()), 0, -1))
+        # images.append(np.moveaxis(np.transpose(env.render()), 0, -1))
+        epi_len = 1
         while not done:
             with torch.no_grad():
                 action, log_prob, mean = actor.get_action(torch.Tensor([obs]).to(device))
             mean = mean[0].cpu().numpy()
-            mean = np.random.normal(mean, 1)
+            mean = np.random.normal(mean, 20 / epi_len)
             dataset["observations"].append(obs)
             dataset["actions"].append(mean)
             obs, reward, done, trunc, info = env.step(mean)
@@ -61,10 +65,11 @@ def gen_traj(actor, env, device, traj_dir, traj_num, transition_num):
             dataset["terminals"].append(done)
             traj[-1].append(obs)
             transition_count += 1
+            epi_len += 1
             if done and info["success"]:
                 count_success += 1 
         # print success rate
-        print("success rate: ", count_success / (i + 1))
+        print("success count: ", count_success)
         print("num of trans: ", transition_count)
         # if transition_count > transition_num:
         #     break
@@ -80,7 +85,8 @@ def gen_traj(actor, env, device, traj_dir, traj_num, transition_num):
 
 
     # save the trajectory
-    np.save(traj_dir, dataset)
+    with open(traj_dir, 'wb') as f:
+        pickle.dump(dataset, f)
 
 
 # load the actor and generate the trajectory
@@ -91,7 +97,7 @@ if __name__ == "__main__":
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     actor = Actor(envs).to(device)
-    actor.load("runs/neg_l2_save_model__sac__200__1719560558/models/490000_actor.pth")
-    gen_traj(actor, envs, device, "dataset.npy", 5, transition_num=1000)
+    actor.load("990000_actor.pth")
+    gen_traj(actor, envs, device, "dataset.npy", 900, transition_num=1000)
 
 

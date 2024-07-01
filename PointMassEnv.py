@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 from typing import Union, Optional
 from gymnasium.spaces import Space
 from PIL import Image, ImageDraw
+import pickle
 
 WALLS = {
         'FourRooms':
@@ -167,11 +168,11 @@ class PointMassEnv(gym.Env[np.ndarray, Union[int, np.ndarray]]):
         # if self.check_success(state):
         #     reward = 10
 
-        # reward = 0
-        # if self.check_success(state):
-        #     reward = 1
+        reward = 0
+        if self.check_success(state):
+            reward = 1
 
-        reward = - np.linalg.norm(state - self._goal)
+        # reward = - np.linalg.norm(state - self._goal)
 
         return reward
     
@@ -437,9 +438,17 @@ if __name__ == '__main__':
             if event.type == pygame.QUIT:
                 running = False
 
-        # img = env.get_env_frame(obs, env._goal)
+        # img = env.render()
 
-        trajectories = [[[0,0],[1,1],[2,2]], [[3,3],[4,4],[5,5]]]
+        # trajectories = [[[0,0],[1,1],[2,2]], [[3,3],[4,4],[5,5]]]
+        # img = env.get_env_frame_with_trajectories(obs, env._goal, trajectories)
+
+        # trajectories = np.load('dataset.npy', allow_pickle=True)
+
+        with open('dataset.npy', 'rb') as f:
+            trajectories = pickle.load(f)
+
+        trajectories = trajectories['trajectories']
         img = env.get_env_frame_with_trajectories(obs, env._goal, trajectories)
 
         img_surface = pygame.surfarray.make_surface(img)
