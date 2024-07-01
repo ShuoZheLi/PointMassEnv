@@ -68,7 +68,7 @@ def modify_reward(dataset, env_name, max_episode_steps=1000):
         dataset["rewards"] /= max_ret - min_ret
         dataset["rewards"] *= max_episode_steps
     elif "antmaze" in env_name:
-        dataset["rewards"] -= 3.0
+        dataset["rewards"] -= 1.0
 
 def soft_update(target: nn.Module, source: nn.Module, tau: float):
     for target_param, source_param in zip(target.parameters(), source.parameters()):
@@ -383,3 +383,328 @@ class TwinQ(nn.Module):
 
     def forward(self, state: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
         return torch.min(*self.both(state, action))
+    
+
+class BcLearning:
+    def __init__(
+        self,
+        max_action: float,
+        actor: nn.Module,
+        actor_optimizer: torch.optim.Optimizer,
+        max_steps: int = 1000000,
+        discount: float = 0.99,
+        device: str = "cpu",
+    ):
+        self.max_action = max_action
+        self.actor = actor
+        self.actor_optimizer = actor_optimizer
+        self.actor_lr_schedule = CosineAnnealingLR(self.actor_optimizer, max_steps)
+        self.discount = discount
+        self.total_it = 0
+        self.device = device
+
+    
+    def _update_policy(
+        self,
+        observations: torch.Tensor,
+        actions: torch.Tensor,
+        log_dict: Dict,
+    ):
+        policy_out = self.actor(observations)
+        if isinstance(policy_out, torch.distributions.Distribution):
+            bc_losses = -policy_out.log_prob(actions).sum(-1, keepdim=False)
+        elif torch.is_tensor(policy_out):
+            if policy_out.shape != actions.shape:
+                raise RuntimeError("Actions shape missmatch")
+            bc_losses = torch.sum((policy_out - actions) ** 2, dim=1)
+        else:
+            raise NotImplementedError
+        policy_loss = torch.mean(bc_losses)
+        log_dict["bc_train/actor_loss"] = policy_loss.item()
+        self.actor_optimizer.zero_grad()
+        policy_loss.backward()
+        self.actor_optimizer.step()
+        self.actor_lr_schedule.step()
+
+    def train(self, batch: TensorBatch) -> Dict[str, float]:
+        self.total_it += 1
+        (
+            observations,
+            actions,
+            rewards,
+            next_observations,
+            dones,
+            experts,
+        ) = batch
+        log_dict = {}
+
+        self._update_policy(observations, actions, log_dict)
+
+        return log_dict
+
+    def state_dict(self) -> Dict[str, Any]:
+        return {
+            "actor": self.actor.state_dict(),
+            "actor_optimizer": self.actor_optimizer.state_dict(),
+            "actor_lr_schedule": self.actor_lr_schedule.state_dict(),
+            "total_it": self.total_it,
+        }
+
+    def load_state_dict(self, state_dict: Dict[str, Any]):
+        self.actor.load_state_dict(state_dict["actor"])
+        self.actor_optimizer.load_state_dict(state_dict["actor_optimizer"])
+        self.actor_lr_schedule.load_state_dict(state_dict["actor_lr_schedule"])
+        self.total_it = state_dict["total_it"]
+
+def qlearning_dataset(env, dataset=None, terminate_on_end=False, **kwargs):
+    if dataset is None:
+        dataset = env.get_dataset(**kwargs)
+
+    N = dataset['rewards'].shape[0]
+    obs_ = []
+    next_obs_ = []
+    action_ = []
+    reward_ = []
+    done_ = []
+    timeout_ = []
+    task_horizon = []
+
+    # The newer version of the dataset adds an explicit
+    # timeouts field. Keep old method for backwards compatability.
+    use_timeouts = False
+    if 'timeouts' in dataset:
+        use_timeouts = True
+
+    episode_step = 0
+    for i in range(N-1):
+        obs = dataset['observations'][i].astype(np.float32)
+        new_obs = dataset['observations'][i+1].astype(np.float32)
+        action = dataset['actions'][i].astype(np.float32)
+        reward = dataset['rewards'][i].astype(np.float32)
+        done_bool = bool(dataset['terminals'][i])
+        timeout_bool = bool(dataset['timeouts'][i])
+
+        if use_timeouts:
+            final_timestep = dataset['timeouts'][i]
+        else:
+            final_timestep = (episode_step == env._max_episode_steps - 1)
+        if (not terminate_on_end) and final_timestep:
+            # Skip this transition and don't apply terminals on the last step of an episode
+            episode_step = 0
+            continue
+        if done_bool or final_timestep:
+            episode_step = 0
+
+        obs_.append(obs)
+        next_obs_.append(new_obs)
+        action_.append(action)
+        reward_.append(reward)
+        done_.append(done_bool)
+        timeout_.append(timeout_bool)
+        task_horizon.append(episode_step)
+        episode_step += 1
+    
+
+    # add in return for each episode
+    return_list = [0]
+    length = [0]
+    for i in range(len(done_)):
+        return_list[-1] += reward_[i]
+        length[-1] += 1
+        if done_[i] or timeout_[i]:
+            return_list.append(0)
+            length.append(0)
+
+    count = 0
+    data_return_list = [0] * len(done_)
+    for i in range(len(done_)):
+        data_return_list[i] = return_list[count]
+        if done_[i] or timeout_[i]:
+            count +=1
+    
+    data_return_list = env.get_normalized_score(np.array(data_return_list)) * 100.0
+    data_return_list = np.array(data_return_list)
+
+
+    epi_obs = []
+    epi_n_obs = []
+    epi_terminals = []
+    epi_rewards = []
+    epi_returns = []
+    epi_actions = []
+    obs = []
+    n_obs = []
+    terminals = []
+    rewards = []
+    actions = []
+    # task_horizon = []
+    task_step = 0
+    for i in range(len(done_)):
+        obs.append(obs_[i])
+        n_obs.append(next_obs_[i])
+        terminals.append(done_[i])
+        rewards.append(reward_[i])
+        actions.append(action_[i])
+        # task_horizon.append(task_step)
+        task_step += 1
+        if done_[i] or timeout_[i]:
+            epi_obs.append(np.array(obs))
+            epi_n_obs.append(np.array(n_obs))
+            epi_terminals.append(np.array(terminals))
+            epi_rewards.append(np.array(rewards))
+            epi_returns.append(data_return_list[i])
+            epi_actions.append(np.array(actions))
+            obs = []
+            n_obs = []
+            terminals = []
+            rewards = []
+            actions = []
+            task_step = 0
+
+    return {
+        'observations': np.array(obs_),
+        'actions': np.array(action_),
+        'next_observations': np.array(next_obs_),
+        'rewards': np.array(reward_),
+        'terminals': np.array(done_),
+        'timeouts': np.array(timeout_),
+        'returns': data_return_list,
+        'epi_obs': np.array(epi_obs, dtype=object),
+        'epi_n_obs': np.array(epi_n_obs, dtype=object),
+        'epi_terminals': np.array(epi_terminals, dtype=object),
+        'epi_rewards': np.array(epi_rewards, dtype=object),
+        'epi_returns': np.array(epi_returns, dtype=object),
+        'epi_actions': np.array(epi_actions, dtype=object),
+        'task_horizon':np.array(task_horizon, dtype=object),
+    }
+
+def create_eval_dataset(dataset):
+
+    f_100_exp_dataset = {
+        'observations': dataset['observations'][np.logical_and(dataset['task_horizon']<100, dataset["expert"])],
+        'actions': dataset['actions'][np.logical_and(dataset['task_horizon']<100, dataset["expert"])],
+        'next_observations': dataset['next_observations'][np.logical_and(dataset['task_horizon']<100, dataset["expert"])],
+        'rewards': dataset['rewards'][np.logical_and(dataset['task_horizon']<100, dataset["expert"])],
+        'terminals': dataset['terminals'][np.logical_and(dataset['task_horizon']<100, dataset["expert"])],
+        'expert': dataset['expert'][np.logical_and(dataset['task_horizon']<100, dataset["expert"])],
+        'task_horizon': dataset['task_horizon'][np.logical_and(dataset['task_horizon']<100, dataset["expert"])],
+    }
+
+    f_100_rand_dataset = {
+        'observations': dataset['observations'][np.logical_and(dataset['task_horizon']<100, dataset["expert"] == False)],
+        'actions': dataset['actions'][np.logical_and(dataset['task_horizon']<100, dataset["expert"] == False)],
+        'next_observations': dataset['next_observations'][np.logical_and(dataset['task_horizon']<100, dataset["expert"] == False)],
+        'rewards': dataset['rewards'][np.logical_and(dataset['task_horizon']<100, dataset["expert"] == False)],
+        'terminals': dataset['terminals'][np.logical_and(dataset['task_horizon']<100, dataset["expert"] == False)],
+        'expert': dataset['expert'][np.logical_and(dataset['task_horizon']<100, dataset["expert"] == False)],
+        'task_horizon': dataset['task_horizon'][np.logical_and(dataset['task_horizon']<100, dataset["expert"] == False)],
+    }
+
+    l_100_exp_dataset = {
+        'observations': dataset['observations'][np.logical_and(dataset['task_horizon']>100, dataset["expert"])],
+        'actions': dataset['actions'][np.logical_and(dataset['task_horizon']>100, dataset["expert"])],
+        'next_observations': dataset['next_observations'][np.logical_and(dataset['task_horizon']>100, dataset["expert"])],
+        'rewards': dataset['rewards'][np.logical_and(dataset['task_horizon']>100, dataset["expert"])],
+        'terminals': dataset['terminals'][np.logical_and(dataset['task_horizon']>100, dataset["expert"])],
+        'expert': dataset['expert'][np.logical_and(dataset['task_horizon']>100, dataset["expert"])],
+        'task_horizon': dataset['task_horizon'][np.logical_and(dataset['task_horizon']>100, dataset["expert"])],
+    }
+
+    l_100_rand_dataset = {
+        'observations': dataset['observations'][np.logical_and(dataset['task_horizon']>100, dataset["expert"] == False)],
+        'actions': dataset['actions'][np.logical_and(dataset['task_horizon']>100, dataset["expert"] == False)],
+        'next_observations': dataset['next_observations'][np.logical_and(dataset['task_horizon']>100, dataset["expert"] == False)],
+        'rewards': dataset['rewards'][np.logical_and(dataset['task_horizon']>100, dataset["expert"] == False)],
+        'terminals': dataset['terminals'][np.logical_and(dataset['task_horizon']>100, dataset["expert"] == False)],
+        'expert': dataset['expert'][np.logical_and(dataset['task_horizon']>100, dataset["expert"] == False)],
+        'task_horizon': dataset['task_horizon'][np.logical_and(dataset['task_horizon']>100, dataset["expert"] == False)],
+    }
+
+    return f_100_exp_dataset, f_100_rand_dataset, l_100_exp_dataset, l_100_rand_dataset
+
+
+def odice_result(dataset, trainer, config):
+    weights = []
+    for i in range(0,len(dataset["observations"]),8192):
+        with torch.no_grad():
+            target_v_next = trainer.v_target(torch.FloatTensor(dataset["next_observations"][i:min(i+8192,len(dataset["next_observations"]))]).to(config.device)).cpu().numpy()
+
+
+            v = trainer.v(torch.FloatTensor(dataset["observations"][i:min(i+8192,len(dataset["observations"]))]).to(config.device)).detach().cpu().numpy()
+            forward_residual = dataset["rewards"][i:min(i+8192,len(dataset["next_observations"]))] + (1.0 - dataset["terminals"][i:min(i+8192,len(dataset["next_observations"]))].astype(float)) * 0.99 * target_v_next - v
+            v_loss_weight = f_prime_inverse(trainer.f_name, torch.FloatTensor(forward_residual))
+            weights.append(v_loss_weight.mean(0))
+
+    weights = np.hstack(weights)
+    weights = weights > 0
+    return weights
+
+def truedice_result(dataset, trainer, config):
+    weights = []
+    for i in range(0,len(dataset["observations"]),8192):
+        with torch.no_grad():
+            v = trainer.v.both(torch.FloatTensor(dataset["observations"][i:min(i+8192,len(dataset["observations"]))]).to(config.device))
+            v_next = trainer.v.both(torch.FloatTensor(dataset["next_observations"][i:min(i+8192,len(dataset["next_observations"]))]).to(config.device))
+            rewards = torch.FloatTensor(dataset["rewards"][i:min(i+8192,len(dataset["rewards"]))]).to(config.device)
+            terminals = torch.FloatTensor((1.0 - dataset["terminals"][i:min(i+8192,len(dataset["terminals"]))].astype(float))).to(config.device)
+
+            pi_residual = rewards + terminals * config.discount * v_next - v
+            weights.append(pi_residual.mean(0).cpu().numpy())
+    
+    weights = np.hstack(weights)
+    return weights
+
+
+
+def semidice_result(dataset, trainer, config):
+    weights = []
+    for i in range(0,len(dataset["observations"]),8192):
+        with torch.no_grad():
+            v = trainer.v.both(torch.FloatTensor(dataset["observations"][i:min(i+8192,len(dataset["observations"]))]).to(config.device))
+            target_v_next = trainer.v_target(torch.FloatTensor(dataset["next_observations"][i:min(i+8192,len(dataset["next_observations"]))]).to(config.device))
+            rewards = torch.FloatTensor(dataset["rewards"][i:min(i+8192,len(dataset["rewards"]))]).to(config.device)
+            terminals = torch.FloatTensor((1.0 - dataset["terminals"][i:min(i+8192,len(dataset["terminals"]))].astype(float))).to(config.device)
+
+            pi_residual = rewards + terminals * config.discount * target_v_next - v
+            pi_residual = f_prime_inverse(trainer.f_name, pi_residual)
+            weights.append(pi_residual.mean(0).cpu().numpy())
+    
+    weights = np.hstack(weights)
+    return weights
+
+def semidice_result_no_vtarget(dataset, trainer, config):
+
+    a_weights = []
+    s_weights = []
+    semi_vs = []
+    for i in range(0,len(dataset["observations"]),8192):
+
+            # v_s.append(v.mean(0).cpu().numpy())
+
+        with torch.no_grad():
+            observations = torch.FloatTensor(dataset["observations"][i:min(i+8192,len(dataset["observations"]))]).to(config.device)
+            actions = torch.FloatTensor(dataset["actions"][i:min(i+8192,len(dataset["actions"]))]).to(config.device)
+            
+            target_q = trainer.q_target(observations, actions)
+            semi_v = trainer.semi_v(observations)
+            adv = (target_q - semi_v)
+            a_weight = f_prime_inverse(trainer.f_name, adv)
+
+            u = trainer.U(observations)
+            s_weight = f_prime_inverse(trainer.f_name, u)
+
+            a_weights.append(a_weight.cpu().numpy())
+            s_weights.append(s_weight.cpu().numpy())
+            semi_vs.append(semi_v.cpu().numpy())
+
+    if len(a_weights) == 0:
+        a_weights.append([0])
+    if len(s_weights) == 0:
+        s_weights.append([0])
+    if len(semi_vs) == 0:
+        semi_vs.append([0])
+
+    a_weights = np.hstack(a_weights)
+    s_weights = np.hstack(s_weights)
+    semi_vs = np.hstack(semi_vs)
+    return a_weights, s_weights, semi_vs
