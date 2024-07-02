@@ -205,6 +205,9 @@ class PointMassEnv(gym.Env[np.ndarray, Union[int, np.ndarray]]):
     def render(self):
         return self.get_env_frame(self.state, self._goal)
 
+    def seed(self, seed):
+        np.random.seed(seed)
+
     ##########################
     #### helper functions ####
     ##########################

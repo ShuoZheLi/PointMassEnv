@@ -26,6 +26,7 @@ from utils import TwinQ, ValueFunction, GaussianPolicy, DeterministicPolicy, \
                     wrap_env, BcLearning, qlearning_dataset
 
 from PointMassEnv import PointMassEnv, WALLS
+import imageio
 
 
 TensorBatch = List[torch.Tensor]
@@ -175,6 +176,8 @@ def f_prime_inverse(name, x, temperatrue=3.0):
         raise ValueError("Unknown policy f name")
 
 
+
+
 class VDICE:
     def __init__(
         self,
@@ -208,14 +211,33 @@ class VDICE:
         self.q_target = copy.deepcopy(self.q).requires_grad_(False).to(device)
         self.mu = mu_network
         self.U = U_network
-        self.actor = actor
+        
         self.true_v_optimizer = true_v_optimizer
         self.semi_v_optimizer = semi_v_optimizer
         self.q_optimizer = q_optimizer
         self.mu_optimizer = mu_optimizer
         self.U_optimizer = U_optimizer
-        self.actor_optimizer = actor_optimizer
-        self.actor_lr_schedule = CosineAnnealingLR(self.actor_optimizer, max_steps)
+
+        self.semi_sa_actor_and = actor
+        self.semi_sa_actor_and_optimizer = actor_optimizer
+        self.semi_sa_actor_and_lr_schedule = CosineAnnealingLR(self.semi_sa_actor_and_optimizer, max_steps)
+
+        self.semi_sa_actor_or = copy.deepcopy(self.semi_sa_actor_and).to(device)
+        self.semi_sa_actor_or_optimizer = torch.optim.Adam(self.semi_sa_actor_or.parameters(), lr=3e-4)
+        self.semi_sa_actor_or_lr_schedule = CosineAnnealingLR(self.semi_sa_actor_or_optimizer, max_steps)
+
+        self.semi_s_actor = copy.deepcopy(self.semi_sa_actor_and).to(device)
+        self.semi_s_actor_optimizer = torch.optim.Adam(self.semi_s_actor.parameters(), lr=3e-4)
+        self.semi_s_actor_lr_schedule = CosineAnnealingLR(self.semi_s_actor_optimizer, max_steps)
+
+        self.semi_a_actor = copy.deepcopy(self.semi_sa_actor_and).to(device)
+        self.semi_a_actor_optimizer = torch.optim.Adam(self.semi_a_actor.parameters(), lr=3e-4)
+        self.semi_a_actor_lr_schedule = CosineAnnealingLR(self.semi_a_actor_optimizer, max_steps)
+
+        self.true_sa_actor = copy.deepcopy(self.semi_sa_actor_and).to(device)
+        self.true_sa_actor_optimizer = torch.optim.Adam(self.true_sa_actor.parameters(), lr=3e-4)
+        self.true_sa_actor_lr_schedule = CosineAnnealingLR(self.true_sa_actor_optimizer, max_steps)
+
         self.vdice_type = vdice_type
         self.vdice_lambda = semi_lambda
         self.semi_eta = semi_eta
@@ -226,6 +248,43 @@ class VDICE:
 
         self.total_it = 0
         self.device = device
+
+    def semidice_result_no_vtarget(self, dataset):
+
+        a_weights = []
+        s_weights = []
+        semi_vs = []
+        for i in range(0,len(dataset["observations"]),8192):
+
+                # v_s.append(v.mean(0).cpu().numpy())
+
+            with torch.no_grad():
+                observations = torch.FloatTensor(dataset["observations"][i:min(i+8192,len(dataset["observations"]))]).to(self.device)
+                actions = torch.FloatTensor(dataset["actions"][i:min(i+8192,len(dataset["actions"]))]).to(self.device)
+                
+                target_q = self.q_target(observations, actions)
+                semi_v = self.semi_v(observations)
+                adv = (target_q - semi_v)
+                a_weight = f_prime_inverse(self.f_name, adv)
+
+                u = self.U(observations)
+                s_weight = f_prime_inverse(self.f_name, u)
+
+                a_weights.append(a_weight.cpu().numpy())
+                s_weights.append(s_weight.cpu().numpy())
+                semi_vs.append(semi_v.cpu().numpy())
+
+        if len(a_weights) == 0:
+            a_weights.append([0])
+        if len(s_weights) == 0:
+            s_weights.append([0])
+        if len(semi_vs) == 0:
+            semi_vs.append([0])
+
+        a_weights = np.hstack(a_weights)
+        s_weights = np.hstack(s_weights)
+        semi_vs = np.hstack(semi_vs)
+        return a_weights, s_weights, semi_vs
 
     def _update_v(
         self,
@@ -246,23 +305,18 @@ class VDICE:
         # TODO: why frenchel_duaL here
         forward_dual_loss = self.vdice_lambda * frenchel_dual(self.f_name, adv)
         semi_v_loss = semi_linear_loss + forward_dual_loss
-
-
-        u = self.U(observations)
-
         semi_v_loss = torch.mean(semi_v_loss)
-        semi_pi_residual = adv.clone().detach()
-
         self.semi_v_optimizer.zero_grad()
         semi_v_loss.backward()
         self.semi_v_optimizer.step()
+
+        semi_pi_residual = adv.clone().detach()
 
         true_v = self.true_v(observations)
         true_v_next = self.true_v(next_observations)
         true_residual = rewards + (1.0 - terminals.float()) * self.discount * true_v_next - true_v
         true_residual = true_residual / self.true_alpha
         true_dual_loss = torch.mean(frenchel_dual(self.f_name, true_residual))
-
         # TODO: why is there a discount factor here?
         # shouldn't it be the lambda ??
         true_linear_loss = (1 - self.discount) * torch.mean(self.true_v(init_observations))
@@ -355,7 +409,7 @@ class VDICE:
         # TODO: where is the reward??
         mu_residual = (1.0 - terminals.float()) * self.discount * mu_next - mu
         # TODO: why frenchel_dual?? !!!!!!!!!!!!!!!!!!!!!!!!!!! frenchel_dual NOOOOOOOOO
-        mu_dual_loss = torch.mean(s_a_weight * self.f_name, mu_residual)
+        mu_dual_loss = torch.mean(s_a_weight * mu_residual)
         # TODO: why is there a discount factor here?
         mu_linear_loss = (1 - self.discount) * torch.mean(self.mu(init_observations))
         mu_loss = mu_linear_loss + mu_dual_loss
@@ -370,48 +424,77 @@ class VDICE:
 
     def _update_policy(
         self,
-        semi_pi_residual: torch.Tensor,
-        true_pi_residual: torch.Tensor,
         observations: torch.Tensor,
+        next_observations: torch.Tensor,
         actions: torch.Tensor,
-        flags: torch.Tensor,
+        rewards: torch.Tensor,
+        terminals: torch.Tensor,
         log_dict: Dict,
     ):
-        u = self.U(observations)
-        # TODO: why is f_prime_inverse on u gives s_weight?
-        s_weight = f_prime_inverse(self.f_name, u)
-        # TODO: why is f_prime_inverse on adv=q - v gives a weight?
-        a_weight = f_prime_inverse(self.f_name, semi_pi_residual)
-        semi_sa_weight = s_weight * a_weight
-        true_sa_weight = f_prime_inverse(self.f_name, true_pi_residual)
-        # policy_out = self.actor(observations)
-        # bc_losses = -policy_out.log_prob(actions).sum(-1, keepdim=False)
-        # policy_loss = torch.mean(a_weight * bc_losses)
-        # policy_loss = torch.sum(flags.squeeze() * bc_losses) / torch.sum(flags.squeeze() == 1)
+        with torch.no_grad():
+            target_q = self.q_target(observations, actions)
+            semi_v = self.semi_v(observations)
+            adv = target_q - semi_v
+            semi_a_weight = f_prime_inverse(self.f_name, adv)
+            u = self.U(observations)
+            semi_s_weight = f_prime_inverse(self.f_name, u)
 
-        flags = flags.squeeze()
-        log_dict["vdice_train/semi_a_sim"] = (((a_weight * flags) > 0).sum() / (a_weight > 0).sum()).item()
-        log_dict["vdice_train/semi_s_sim"] = (((s_weight * flags) > 0).sum() / (s_weight > 0).sum()).item()
-        log_dict["vdice_train/semi_sa_sim"] = (((semi_sa_weight * flags) > 0).sum() / (semi_sa_weight > 0).sum()).item()
-        log_dict["vdice_train/true_sa_sim"] = (((true_sa_weight * flags) > 0).sum() / (true_sa_weight > 0).sum()).item()
-
-        log_dict["vdice_train/semi_a_num"] = (((a_weight * flags) > 0).sum()).item()
-        log_dict["vdice_train/semi_s_num"] = (((s_weight * flags) > 0).sum()).item()
-        log_dict["vdice_train/semi_sa_num"] = (((semi_sa_weight * flags) > 0).sum()).item()
-        log_dict["vdice_train/true_sa_num"] = (((true_sa_weight * flags) > 0).sum()).item()
-
-        # log_dict["actor_loss"] = policy_loss.item()
-        log_dict["vdice_train/s_weight"] = s_weight.mean().item()
-        log_dict["vdice_train/a_weight"] = a_weight.mean().item()
-        log_dict["vdice_train/semi_sa_weight"] = s_weight.mean().item()
-        log_dict["vdice_train/true_sa_weight"] = true_sa_weight.mean().item()
+            true_v = self.true_v(observations)
+            true_v_next = self.true_v(next_observations)
+            true_residual = rewards + (1.0 - terminals.float()) * self.discount * true_v_next - true_v
+            true_residual = true_residual / self.true_alpha
+            true_sa_weight = f_prime_inverse(self.f_name, true_residual)
 
 
 
-        # self.actor_optimizer.zero_grad()
-        # policy_loss.backward()
-        # self.actor_optimizer.step()
-        # self.actor_lr_schedule.step()
+
+
+        policy_out = self.semi_sa_actor_and(observations)
+        bc_losses = -policy_out.log_prob(actions).sum(-1, keepdim=False)
+        policy_loss = torch.mean(semi_a_weight * semi_s_weight * bc_losses)
+        self.semi_sa_actor_and_optimizer.zero_grad()
+        policy_loss.backward()
+        self.semi_sa_actor_and_optimizer.step()
+        self.semi_sa_actor_and_lr_schedule.step()
+        log_dict["vdice_train/semi_sa_policy_loss"] = policy_loss.item()
+
+        policy_out = self.semi_sa_actor_or(observations)
+        bc_losses = -policy_out.log_prob(actions).sum(-1, keepdim=False)
+        semi_a_or_s_weight = torch.max(semi_a_weight, semi_s_weight)
+        policy_loss = torch.mean(semi_a_or_s_weight * bc_losses)
+        self.semi_sa_actor_or_optimizer.zero_grad()
+        policy_loss.backward()
+        self.semi_sa_actor_or_optimizer.step()
+        self.semi_sa_actor_or_lr_schedule.step()
+        log_dict["vdice_train/semi_sa_or_policy_loss"] = policy_loss.item()
+
+        policy_out = self.semi_s_actor(observations)
+        bc_losses = -policy_out.log_prob(actions).sum(-1, keepdim=False)
+        policy_loss = torch.mean(semi_s_weight * bc_losses)
+        self.semi_s_actor_optimizer.zero_grad()
+        policy_loss.backward()
+        self.semi_s_actor_optimizer.step()
+        self.semi_s_actor_lr_schedule.step()
+        log_dict["vdice_train/semi_s_policy_loss"] = policy_loss.item()
+
+        policy_out = self.semi_a_actor(observations)
+        bc_losses = -policy_out.log_prob(actions).sum(-1, keepdim=False)
+        policy_loss = torch.mean(semi_a_weight * bc_losses)
+        self.semi_a_actor_optimizer.zero_grad()
+        policy_loss.backward()
+        self.semi_a_actor_optimizer.step()
+        self.semi_a_actor_lr_schedule.step()
+        log_dict["vdice_train/semi_a_policy_loss"] = policy_loss.item()
+
+        policy_out = self.true_sa_actor(observations)
+        bc_losses = -policy_out.log_prob(actions).sum(-1, keepdim=False)
+        policy_loss = torch.mean(true_sa_weight * bc_losses)
+        self.true_sa_actor_optimizer.zero_grad()
+        policy_loss.backward()
+        self.true_sa_actor_optimizer.step()
+        self.true_sa_actor_lr_schedule.step()
+        log_dict["vdice_train/true_sa_policy_loss"] = policy_loss.item()
+        
 
     
     def train(self, batch: TensorBatch) -> Dict[str, float]:
@@ -430,16 +513,43 @@ class VDICE:
         rewards = rewards.squeeze(dim=-1)
         dones = dones.squeeze(dim=-1)
         # Update V function
-        semi_residual, true_residual = self._update_v(observations, actions, next_observations, rewards, dones, observations, log_dict)
+        semi_residual, true_residual = self._update_v(observations, 
+                                                      actions, 
+                                                      next_observations, 
+                                                      rewards, 
+                                                      dones, 
+                                                      observations, 
+                                                      log_dict)
         # Update Q function
-        self._update_q(observations, actions, next_observations, rewards, dones, log_dict)
+        self._update_q(observations, 
+                       actions, 
+                       next_observations, 
+                       rewards, 
+                       dones, 
+                       log_dict)
+        
         # Update U function
-        s_a_weight = self._update_U(semi_residual, observations, next_observations, dones, log_dict)
+        s_a_weight = self._update_U(semi_residual, 
+                                    observations, 
+                                    next_observations, 
+                                    dones, 
+                                    log_dict)
+
         # Update Mu function
-        self._update_mu(s_a_weight, observations, next_observations, dones, observations, log_dict)
+        self._update_mu(s_a_weight, 
+                        observations, 
+                        next_observations, 
+                        dones, 
+                        observations, 
+                        log_dict)
 
         # Update actor
-        self._update_policy(semi_residual, true_residual, observations, actions, flags, log_dict)
+        self._update_policy(observations, 
+                            next_observations, 
+                            actions, 
+                            rewards, 
+                            dones, 
+                            log_dict,)
 
         return log_dict
 
@@ -456,9 +566,18 @@ class VDICE:
             "q": self.q.state_dict(),
             "q_target": self.q_target.state_dict(),
             "q_optimizer": self.q_optimizer.state_dict(),
-            "actor": self.actor.state_dict(),
-            "actor_optimizer": self.actor_optimizer.state_dict(),
-            "actor_lr_schedule": self.actor_lr_schedule.state_dict(),
+
+            "semi_sa_actor_and": self.semi_sa_actor_and.state_dict(),
+            "semi_sa_actor_and_optimizer": self.semi_sa_actor_and_optimizer.state_dict(),
+            "semi_sa_actor_or": self.semi_sa_actor_or.state_dict(),
+            "semi_sa_actor_or_optimizer": self.semi_sa_actor_or_optimizer.state_dict(),
+            "semi_s_actor": self.semi_s_actor.state_dict(),
+            "semi_s_actor_optimizer": self.semi_s_actor_optimizer.state_dict(),
+            "semi_a_actor": self.semi_a_actor.state_dict(),
+            "semi_a_actor_optimizer": self.semi_a_actor_optimizer.state_dict(),
+            "true_sa_actor": self.true_sa_actor.state_dict(),
+            "true_sa_actor_optimizer": self.true_sa_actor_optimizer.state_dict(),
+
             "total_it": self.total_it,
         }
 
@@ -474,9 +593,16 @@ class VDICE:
         self.q.load_state_dict(state_dict["q"])
         self.q_target.load_state_dict(state_dict["q_target"])
         self.q_optimizer.load_state_dict(state_dict["q_optimizer"])
-        self.actor.load_state_dict(state_dict["actor"])
-        self.actor_optimizer.load_state_dict(state_dict["actor_optimizer"])
-        self.actor_lr_schedule.load_state_dict(state_dict["actor_lr_schedule"])
+        self.semi_a_actor_and.load_state_dict(state_dict["semi_sa_actor_and"])
+        self.semi_a_actor_and_optimizer.load_state_dict(state_dict["semi_sa_actor_and_optimizer"])
+        self.semi_a_actor_or.load_state_dict(state_dict["semi_sa_actor_or"])
+        self.semi_a_actor_or_optimizer.load_state_dict(state_dict["semi_sa_actor_or_optimizer"])
+        self.semi_s_actor.load_state_dict(state_dict["semi_s_actor"])
+        self.semi_s_actor_optimizer.load_state_dict(state_dict["semi_s_actor_optimizer"])
+        self.semi_a_actor.load_state_dict(state_dict["semi_a_actor"])
+        self.semi_a_actor_optimizer.load_state_dict(state_dict["semi_a_actor_optimizer"])
+        self.true_sa_actor.load_state_dict(state_dict["true_sa_actor"])
+        self.true_sa_actor_optimizer.load_state_dict(state_dict["true_sa_actor_optimizer"])
         self.total_it = state_dict["total_it"]
 
 
@@ -489,11 +615,19 @@ def trainer_init(config: TrainConfig, env):
     if config.checkpoints_path is not None:
         print(f"Checkpoints path: {config.checkpoints_path}")
         os.makedirs(config.checkpoints_path, exist_ok=True)
-        os.makedirs(config.checkpoints_path+"_semi", exist_ok=True)
-        os.makedirs(config.checkpoints_path+"_or_ratio_id", exist_ok=True)
-        os.makedirs(config.checkpoints_path+"_and_ratio_id", exist_ok=True)
-        os.makedirs(config.checkpoints_path+"_action_ratio_id", exist_ok=True)
-        os.makedirs(config.checkpoints_path+"_state_ratio_id", exist_ok=True)
+        # os.makedirs(config.checkpoints_path+"/semi_s_and_a/model", exist_ok=True)
+        # os.makedirs(config.checkpoints_path+"/semi_s_or_a/model", exist_ok=True)
+        # os.makedirs(config.checkpoints_path+"/semi_s/model", exist_ok=True)
+        # os.makedirs(config.checkpoints_path+"/semi_a/model", exist_ok=True)
+        # os.makedirs(config.checkpoints_path+"/true_s_and_a/model", exist_ok=True)
+
+        os.makedirs(config.checkpoints_path+"/model", exist_ok=True)
+
+        os.makedirs(config.checkpoints_path+"/semi_s_and_a/gif", exist_ok=True)
+        os.makedirs(config.checkpoints_path+"/semi_s_or_a/gif", exist_ok=True)
+        os.makedirs(config.checkpoints_path+"/semi_s/gif", exist_ok=True)
+        os.makedirs(config.checkpoints_path+"/semi_a/gif", exist_ok=True)
+        os.makedirs(config.checkpoints_path+"/true_s_and_a/gif", exist_ok=True)
 
 
         with open(os.path.join(config.checkpoints_path, "config.yaml"), "w") as f:
@@ -571,7 +705,7 @@ def create_dataset(config: TrainConfig):
     env = PointMassEnv(start=np.array([12.5, 4.5], dtype=np.float32), 
                                 goal=np.array([4.5, 12.5], dtype=np.float32), 
                                 goal_radius=0.8)
-    dataset = np.load("dataset.npy", allow_pickle=True).item()
+    dataset = np.load("dataset.npy", allow_pickle=True)
     state_dim = env.observation_space.shape[0]
     action_dim = env.action_space.shape[0]
     dataset["id"] = np.arange(dataset["actions"].shape[0])
@@ -580,15 +714,46 @@ def create_dataset(config: TrainConfig):
 
     return dataset, state_dim, action_dim, env
 
+def eval_policy(actor, global_step, gif_dir, device, wandb, name):
+    env = PointMassEnv(start=np.array([12.5, 4.5], dtype=np.float32), 
+                               goal=np.array([4.5, 12.5], dtype=np.float32), 
+                               goal_radius=0.8)
+    
+    actor.eval()
+    images = []
+    count_success = 0
+    for i in range(5):
+        episode_return = 0.0
+        episode_length = 0
+        done = False
+        obs, _ = env.reset()
+        images.append(np.moveaxis(np.transpose(env.render()), 0, -1))
+        while not done:
+            with torch.no_grad():
+                mean = actor.act(torch.Tensor([obs]).to(device), device=device)
+            obs, reward, done, trunc, info = env.step(mean)
+            images.append(np.moveaxis(np.transpose(env.render()), 0, -1))
+            episode_return += reward
+            episode_length += 1
+            if done and info["success"]:
+                count_success += 1
+    
+    actor.train()
+    # save images into gif
+    imageio.mimsave(gif_dir + "/" +str(global_step) + ".gif", images, fps=10)
+    success_rate = count_success / 5.0
 
+    wandb.log(
+                {"policy_train/"+name: success_rate,
+                 "policy_train": global_step,},
+            )
+    print(name+f" Success rate: {success_rate}")
+    return episode_return, episode_length
 
 
 @pyrallis.wrap()
 def train(config: TrainConfig):
     dataset, state_dim, action_dim, env = create_dataset(config)
-
-    # bc_dataset = copy.deepcopy(dataset)
-
 
     if config.normalize_reward:
         modify_reward(dataset, config.env_1)
@@ -620,11 +785,8 @@ def train(config: TrainConfig):
 
 
     wandb_init(asdict(config))
-    # f_100_exp_dataset, f_100_rand_dataset, l_100_exp_dataset, l_100_rand_dataset = create_eval_dataset(dataset)
     evaluations = []
     t = 0
-
-
 
 
     while t < int(config.max_timesteps):
@@ -637,50 +799,33 @@ def train(config: TrainConfig):
 
         wandb.log(semi_log_dict,)
 
-
         if (t + 1) % config.eval_freq == 0:
-            eval_scores = eval_actor(
-                env,
-                semi_trainer.actor,
-                device=config.device,
-                n_episodes=config.n_episodes,
-                seed=config.seed,
-            )
-            eval_score = eval_scores.mean()
-            normalized_eval_score = env.get_normalized_score(eval_score) * 100.0
-            evaluations.append(normalized_eval_score)
-            wandb.log(
-                {"vdice_train/normalized_score": normalized_eval_score,
-                 "vdice_step": t,},
-            )
-            print("normalized_score,",normalized_eval_score)
+            eval_policy(semi_trainer.semi_sa_actor_and, t, config.checkpoints_path+"/semi_s_and_a/gif", config.device, wandb, "semi_s_and_a")
+            eval_policy(semi_trainer.semi_sa_actor_or, t, config.checkpoints_path+"/semi_s_or_a/gif", config.device, wandb, "semi_s_or_a")
+            eval_policy(semi_trainer.semi_s_actor, t, config.checkpoints_path+"/semi_s/gif", config.device, wandb, "semi_s")
+            eval_policy(semi_trainer.semi_a_actor, t, config.checkpoints_path+"/semi_a/gif", config.device, wandb, "semi_a")
+            eval_policy(semi_trainer.true_sa_actor, t, config.checkpoints_path+"/true_s_and_a/gif", config.device, wandb, "true_s_and_a")
+            print("==============================")
+
+        if (t + 1) % config.save_freq == 0:
+            if config.checkpoints_path is not None:
+                torch.save(
+                    semi_trainer.state_dict(),
+                    os.path.join(config.checkpoints_path+"/model", f"checkpoint_{t}.pt"),
+                )
+
+                # a_weights, s_weights, semi_v = semidice_result_no_vtarget(dataset, semi_trainer, config)
+                # action_ratio_filter = a_weights > 0
+                # state_ratio_filter = s_weights > 0
+                # or_ratio_filter = np.logical_or(a_weights > 0, s_weights > 0)
+                # and_ratio_filter = np.logical_and(a_weights > 0, s_weights > 0)
 
 
-        # if (t + 1) % config.save_freq == 0:
-        #     if config.checkpoints_path is not None:
-        #         torch.save(
-        #             semi_trainer.state_dict(),
-        #             os.path.join(config.checkpoints_path+"_semi", f"checkpoint_{t}.pt"),
-        #         )
-
-        #         a_weights, s_weights, semi_v = semidice_result_no_vtarget(dataset, semi_trainer, config)
-        #         action_ratio_filter = a_weights > 0
-        #         state_ratio_filter = s_weights > 0
-        #         or_ratio_filter = np.logical_or(a_weights > 0, s_weights > 0)
-        #         and_ratio_filter = np.logical_and(a_weights > 0, s_weights > 0)
-
-        #         log_dict = {}
-        #         log_dict["filter/size of action ratio filter: "] = action_ratio_filter.sum()
-        #         log_dict["filter/size of state ratio filter: "] = state_ratio_filter.sum()
-        #         log_dict["filter/size of or ratio filter: "] = or_ratio_filter.sum()
-        #         log_dict["filter/size of and ratio filter: "] = and_ratio_filter.sum()
-        #         wandb.log(log_dict)
-
-        #         # save dataset id
-        #         np.save(os.path.join(config.checkpoints_path+"_action_ratio_id", f"checkpoint_{t}.npy"), dataset["id"][action_ratio_filter])
-        #         np.save(os.path.join(config.checkpoints_path+"_state_ratio_id", f"checkpoint_{t}.npy"), dataset["id"][state_ratio_filter])
-        #         np.save(os.path.join(config.checkpoints_path+"_or_ratio_id", f"checkpoint_{t}.npy"), dataset["id"][or_ratio_filter])
-        #         np.save(os.path.join(config.checkpoints_path+"_and_ratio_id", f"checkpoint_{t}.npy"), dataset["id"][and_ratio_filter])
+                # # save dataset id
+                # np.save(os.path.join(config.checkpoints_path+"_action_ratio_id", f"checkpoint_{t}.npy"), dataset["id"][action_ratio_filter])
+                # np.save(os.path.join(config.checkpoints_path+"_state_ratio_id", f"checkpoint_{t}.npy"), dataset["id"][state_ratio_filter])
+                # np.save(os.path.join(config.checkpoints_path+"_or_ratio_id", f"checkpoint_{t}.npy"), dataset["id"][or_ratio_filter])
+                # np.save(os.path.join(config.checkpoints_path+"_and_ratio_id", f"checkpoint_{t}.npy"), dataset["id"][and_ratio_filter])
         t += 1
 
 

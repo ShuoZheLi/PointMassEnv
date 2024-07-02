@@ -36,6 +36,7 @@ def gen_traj(actor, env, device, traj_dir, traj_num, transition_num):
     dataset["rewards"] = []
     dataset["next_observations"] = []
     dataset["terminals"] = []
+    dataset["success"] = []
 
 
     env = PointMassEnv(start=np.array([12.5, 4.5], dtype=np.float32), 
@@ -67,20 +68,23 @@ def gen_traj(actor, env, device, traj_dir, traj_num, transition_num):
             transition_count += 1
             epi_len += 1
             if done and info["success"]:
-                count_success += 1 
+                count_success += 1
+                dataset["success"].append(True)
+            else:
+                dataset["success"].append(False)
         # print success rate
         print("success count: ", count_success)
         print("num of trans: ", transition_count)
-        # if transition_count > transition_num:
-        #     break
+        if transition_count > transition_num:
+            break
 
     dataset["next_observations"] = dataset["observations"][1:] + [obs]
 
-    dataset["observations"] = np.array(dataset["observations"])
-    dataset["actions"] = np.array(dataset["actions"])
-    dataset["rewards"] = np.array(dataset["rewards"])
-    dataset["next_observations"] = np.array(dataset["next_observations"])
-    dataset["terminals"] = np.array(dataset["terminals"])
+    dataset["observations"] = np.array(dataset["observations"], dtype=np.float32)
+    dataset["actions"] = np.array(dataset["actions"], dtype=np.float32)
+    dataset["rewards"] = np.array(dataset["rewards"], dtype=np.float32)
+    dataset["next_observations"] = np.array(dataset["next_observations"], dtype=np.float32)
+    dataset["terminals"] = np.array(dataset["terminals"], dtype=np.float32)
     dataset["trajectories"] = np.array(traj, dtype=object)
 
 
@@ -98,6 +102,6 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     actor = Actor(envs).to(device)
     actor.load("990000_actor.pth")
-    gen_traj(actor, envs, device, "dataset.npy", 900, transition_num=1000)
+    gen_traj(actor, envs, device, "dataset.npy", 90000000, transition_num=1_000_000)
 
 
