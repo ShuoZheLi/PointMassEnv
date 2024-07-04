@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import d4rl
-import gym
+import gymnasium as gym
 import numpy as np
 import pyrallis
 import torch
@@ -41,86 +41,57 @@ DEFAULT_DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 @dataclass
 class TrainConfig:
-    # Experiment
+    #############################
+    ######### Experiment ########
+    #############################
+    seed: int = 100
     eval_freq: int = int(5e3)  # How often (time steps) we evaluate
-    save_freq: int = int(1e3)  # How often (time steps) save the model
+    save_freq: int = int(5e3)  # How often (time steps) save the model
     update_freq: int = int(1.5e5)  # How often (time steps) we update the model
     n_episodes: int = 10  # How many episodes run during evaluation
     max_timesteps: int = int(6e6)  # Max time steps to run environment
-    load_semi_model: str = None  # Model load file name, "" doesn't load
-    load_true_model: str = None  # Model load file name, "" doesn't load
-    load_id_dataset: str = None  # Model load file name, "" doesn't load
-    # VDICE
     buffer_size: int = 2_000_000  # Replay buffer size
     batch_size: int = 256  # Batch size for all networks
-    # batch_size: int = 512  # Batch size for all networks
-    discount: float = 0.99  # Discount factor
-    tau: float = 0.005  # Target network update rate
-    
-    
-    # iql_deterministic: bool = False  # Use deterministic actor
+    # discount: float = 0.99  # Discount factor
+    discount: float = 0.976  # Discount factor
 
-    normalize: bool = True  # Normalize states
-    normalize_reward: bool = True  # Normalize reward
+    #############################
+    ######### NN Arc ############
+    #############################
     vf_lr: float = 3e-4  # V function learning rate
     actor_lr: float = 3e-4  # Actor learning rate
     actor_dropout: Optional[float] = None  # Adroit uses dropout for policy network
-
-
-    # Wandb logging
-    # project: str = "hm_odice"
-    project: str = "test_hopper"
-    env_1: str = "antmaze-umaze-v2"  # OpenAI gym environment name
-    env_2: str = "antmaze-umaze-v2"  # OpenAI gym environment name
-    # env: str = "hopper-medium-v2"  # OpenAI gym environment name
-    # group: str = "VDICE-D4RL"
-    seed: int = 100
-
-    
-    
-    vdice_lambda: float = 0.6
-    vdice_eta: float = 4.0
-    device: str = "cuda"
-    alg: str = "100_0st"
-    # checkpoints_path: Optional[str] = "model/"
-    checkpoints_path: Optional[str] = "test"
-    vdice_type: Optional[str] = "semi"
-    
-    combine: bool = False
-    filter_dataset: bool = False
-    w_threshold: float = 0
-
-    load_true_dice: Optional[str] = ""
-    load_vdice: Optional[str] = ""
-    # load_true_dice: Optional[str] = "/robodata/corl/iql_reverse_kl_preload_value/algorithms/dice/own_dataset_trueDice_hopper-random-expert-0_1/100_0_95_hopper-random-expert-0_1-v2/100_0st-hopper-random-expert-0.1-v2-80df24f5/checkpoint_999999.pt"
-    # load_vdice: Optional[str] = "/robodata/corl/iql_reverse_kl_preload_value/algorithms/dice/truedice_combine_vdice/100_0_5_truedice_combine_vdice/100_0st-hopper-random-expert-0.1-v2-3e32d6f2/checkpoint_999999.pt"
-
-    semi_vdice_lambda: float = 0.55
-    # semi_vdice_lambda: float = 0.4237
-    true_vdice_lambda: float = 0.99
-
-    semi_lambda_delta: float = 0
-    true_lambda_delta: float = 0
-
-    true_alpha: float = 100.0
-    semi_eta: float = 1.0
-
-    bc_max_timesteps: int = 3e5
-    bc_policy_step: int = 0
-    iql_deterministic: bool = False  # Use deterministic actor
-
-    policy_ratio: bool = False
-    state_ratio: bool = False
-    or_ration: bool = False
-    and_ratio: bool = False
-
-    expert_num: int = 1e5
     layernorm: bool = False
     hidden_dim: int = 256
+    tau: float = 0.005  # Target network update rate
+    
+    #############################
+    ###### dataset preprocess ###
+    #############################
+    # normalize: bool = True  # Normalize states
+    normalize: bool = False  # Normalize states
+    normalize_reward: bool = True  # Normalize reward
+    # normalize_reward: bool = False  # Normalize reward
+    
+    #############################
+    ###### Wandb Logging ########
+    #############################
+    project: str = "test"
+    checkpoints_path: Optional[str] = "test"
+    alg: str = "test"
+    env_1: str = "antmaze-umaze-v2"  # OpenAI gym environment name
+    env_2: str = "antmaze-umaze-v2"  # OpenAI gym environment name
+
+    #############################
+    #### DICE Hyperparameters ###
+    #############################
+    device: str = "cuda"
+    vdice_type: Optional[str] = "semi"
+    semi_dice_lambda: float = 0.3
+    true_dice_alpha: float = 1.0
     
 
     def __post_init__(self):
-
         self.name = f"{self.alg}-{self.env_1}-{str(uuid.uuid4())[:8]}"
         if self.checkpoints_path is not None:
             self.checkpoints_path = os.path.join(self.checkpoints_path, self.name)
@@ -139,11 +110,6 @@ def wandb_init(config: dict) -> None:
     wandb.run.save()
     wandb.save(os.path.abspath(__file__))
 
-
-    # define our custom x axis metric
-    wandb.define_metric("bc_step")
-    # set all other train/ metrics to use this step
-    wandb.define_metric("bc_train/*", step_metric="bc_step")
 
     wandb.define_metric("vdice_step")
     wandb.define_metric("vdice_train/*", step_metric="vdice_step")
@@ -195,9 +161,8 @@ class VDICE:
         U_network: nn.Module,
         U_optimizer: torch.optim.Optimizer,
         vdice_type: str = "semi",
-        semi_lambda: float = 0.7,
-        semi_eta: float = 0.7,
-        true_alpha: float = 0.1,
+        semi_dice_lambda: float = 0.7,
+        true_dice_alpha: float = 0.1,
         f_name: str = 'Smoothed_square_chi',
         max_steps: int = 1000000,
         discount: float = 0.99,
@@ -239,9 +204,8 @@ class VDICE:
         self.true_sa_actor_lr_schedule = CosineAnnealingLR(self.true_sa_actor_optimizer, max_steps)
 
         self.vdice_type = vdice_type
-        self.vdice_lambda = semi_lambda
-        self.semi_eta = semi_eta
-        self.true_alpha = true_alpha
+        self.semi_dice_lambda = semi_dice_lambda
+        self.true_dice_alpha = true_dice_alpha
         self.f_name = f_name
         self.discount = discount
         self.tau = tau
@@ -301,9 +265,9 @@ class VDICE:
 
         semi_v = self.semi_v(observations)
         adv = target_q - semi_v
-        semi_linear_loss = (1 - self.vdice_lambda) * semi_v
+        semi_linear_loss = (1 - self.semi_dice_lambda) * semi_v
         # TODO: why frenchel_duaL here
-        forward_dual_loss = self.vdice_lambda * frenchel_dual(self.f_name, adv)
+        forward_dual_loss = self.semi_dice_lambda * frenchel_dual(self.f_name, adv)
         semi_v_loss = semi_linear_loss + forward_dual_loss
         semi_v_loss = torch.mean(semi_v_loss)
         self.semi_v_optimizer.zero_grad()
@@ -315,7 +279,7 @@ class VDICE:
         true_v = self.true_v(observations)
         true_v_next = self.true_v(next_observations)
         true_residual = rewards + (1.0 - terminals.float()) * self.discount * true_v_next - true_v
-        true_residual = true_residual / self.true_alpha
+        true_residual = true_residual / self.true_dice_alpha
         true_dual_loss = torch.mean(frenchel_dual(self.f_name, true_residual))
         # TODO: why is there a discount factor here?
         # shouldn't it be the lambda ??
@@ -421,7 +385,6 @@ class VDICE:
         log_dict["vdice_train/mu_loss"] = mu_loss.item()
         log_dict["vdice_train/mu_value"] = mu.mean().item()
 
-
     def _update_policy(
         self,
         observations: torch.Tensor,
@@ -442,7 +405,7 @@ class VDICE:
             true_v = self.true_v(observations)
             true_v_next = self.true_v(next_observations)
             true_residual = rewards + (1.0 - terminals.float()) * self.discount * true_v_next - true_v
-            true_residual = true_residual / self.true_alpha
+            true_residual = true_residual / self.true_dice_alpha
             true_sa_weight = f_prime_inverse(self.f_name, true_residual)
 
 
@@ -593,10 +556,10 @@ class VDICE:
         self.q.load_state_dict(state_dict["q"])
         self.q_target.load_state_dict(state_dict["q_target"])
         self.q_optimizer.load_state_dict(state_dict["q_optimizer"])
-        self.semi_a_actor_and.load_state_dict(state_dict["semi_sa_actor_and"])
-        self.semi_a_actor_and_optimizer.load_state_dict(state_dict["semi_sa_actor_and_optimizer"])
-        self.semi_a_actor_or.load_state_dict(state_dict["semi_sa_actor_or"])
-        self.semi_a_actor_or_optimizer.load_state_dict(state_dict["semi_sa_actor_or_optimizer"])
+        self.semi_sa_actor_and.load_state_dict(state_dict["semi_sa_actor_and"])
+        self.semi_sa_actor_and_optimizer.load_state_dict(state_dict["semi_sa_actor_and_optimizer"])
+        self.semi_sa_actor_or.load_state_dict(state_dict["semi_sa_actor_or"])
+        self.semi_sa_actor_or_optimizer.load_state_dict(state_dict["semi_sa_actor_or_optimizer"])
         self.semi_s_actor.load_state_dict(state_dict["semi_s_actor"])
         self.semi_s_actor_optimizer.load_state_dict(state_dict["semi_s_actor_optimizer"])
         self.semi_a_actor.load_state_dict(state_dict["semi_a_actor"])
@@ -605,7 +568,29 @@ class VDICE:
         self.true_sa_actor_optimizer.load_state_dict(state_dict["true_sa_actor_optimizer"])
         self.total_it = state_dict["total_it"]
 
+    def get_weights(
+        self,
+        observations: torch.Tensor,
+        next_observations: torch.Tensor,
+        actions: torch.Tensor,
+        rewards: torch.Tensor,
+        terminals: torch.Tensor,
+    ):
+        with torch.no_grad():
+            target_q = self.q_target(observations, actions)
+            semi_v = self.semi_v(observations)
+            adv = target_q - semi_v
+            semi_a_weight = f_prime_inverse(self.f_name, adv)
+            u = self.U(observations)
+            semi_s_weight = f_prime_inverse(self.f_name, u)
 
+            true_v = self.true_v(observations)
+            true_v_next = self.true_v(next_observations)
+            true_residual = rewards + (1.0 - terminals.float()) * self.discount * true_v_next - true_v
+            true_residual = true_residual / self.true_dice_alpha
+            true_sa_weight = f_prime_inverse(self.f_name, true_residual)
+        
+        return semi_s_weight, semi_a_weight, true_sa_weight
 
 def trainer_init(config: TrainConfig, env):
     state_dim = env.observation_space.shape[0]
@@ -615,19 +600,14 @@ def trainer_init(config: TrainConfig, env):
     if config.checkpoints_path is not None:
         print(f"Checkpoints path: {config.checkpoints_path}")
         os.makedirs(config.checkpoints_path, exist_ok=True)
-        # os.makedirs(config.checkpoints_path+"/semi_s_and_a/model", exist_ok=True)
-        # os.makedirs(config.checkpoints_path+"/semi_s_or_a/model", exist_ok=True)
-        # os.makedirs(config.checkpoints_path+"/semi_s/model", exist_ok=True)
-        # os.makedirs(config.checkpoints_path+"/semi_a/model", exist_ok=True)
-        # os.makedirs(config.checkpoints_path+"/true_s_and_a/model", exist_ok=True)
 
         os.makedirs(config.checkpoints_path+"/model", exist_ok=True)
 
-        os.makedirs(config.checkpoints_path+"/semi_s_and_a/gif", exist_ok=True)
-        os.makedirs(config.checkpoints_path+"/semi_s_or_a/gif", exist_ok=True)
-        os.makedirs(config.checkpoints_path+"/semi_s/gif", exist_ok=True)
-        os.makedirs(config.checkpoints_path+"/semi_a/gif", exist_ok=True)
-        os.makedirs(config.checkpoints_path+"/true_s_and_a/gif", exist_ok=True)
+        os.makedirs(config.checkpoints_path+"/gif/semi_s_and_a", exist_ok=True)
+        os.makedirs(config.checkpoints_path+"/gif/semi_s_or_a", exist_ok=True)
+        os.makedirs(config.checkpoints_path+"/gif/semi_s", exist_ok=True)
+        os.makedirs(config.checkpoints_path+"/gif/semi_a", exist_ok=True)
+        os.makedirs(config.checkpoints_path+"/gif/true_s_and_a", exist_ok=True)
 
 
         with open(os.path.join(config.checkpoints_path, "config.yaml"), "w") as f:
@@ -672,9 +652,8 @@ def trainer_init(config: TrainConfig, env):
         "device": config.device,
         # VDICE
         "vdice_type": config.vdice_type,
-        "semi_lambda": config.vdice_lambda,
-        "semi_eta": config.semi_eta,
-        "true_alpha": config.true_alpha,
+        "semi_dice_lambda": config.semi_dice_lambda,
+        "true_dice_alpha": config.true_dice_alpha,
         "max_steps": config.max_timesteps,
     }
 
@@ -685,19 +664,6 @@ def trainer_init(config: TrainConfig, env):
     # Initialize actor
     trainer = VDICE(**kwargs)
     return trainer
-
-def change_reward(dataset):
-    terminals = dataset["terminals"]
-    rewards = dataset["rewards"]
-
-    for i in range(len(terminals)):
-        if terminals[i]:
-            rewards[i] = 1
-        else:
-            rewards[i] = 0
-
-    dataset["rewards"] = rewards
-    return dataset
 
 
 def create_dataset(config: TrainConfig):
@@ -710,7 +676,6 @@ def create_dataset(config: TrainConfig):
     action_dim = env.action_space.shape[0]
     dataset["id"] = np.arange(dataset["actions"].shape[0])
 
-    # dataset = change_reward(dataset)
 
     return dataset, state_dim, action_dim, env
 
@@ -722,7 +687,7 @@ def eval_policy(actor, global_step, gif_dir, device, wandb, name):
     actor.eval()
     images = []
     count_success = 0
-    for i in range(5):
+    for i in range(1):
         episode_return = 0.0
         episode_length = 0
         done = False
@@ -741,15 +706,71 @@ def eval_policy(actor, global_step, gif_dir, device, wandb, name):
     actor.train()
     # save images into gif
     imageio.mimsave(gif_dir + "/" +str(global_step) + ".gif", images, fps=10)
-    success_rate = count_success / 5.0
+    success_rate = count_success / 1.0
 
     wandb.log(
-                {"policy_train/"+name: success_rate,
-                 "policy_train": global_step,},
+                {"vdice_train/"+name: success_rate,
+                #  "policy_train": global_step,
+                 },
             )
     print(name+f" Success rate: {success_rate}")
     return episode_return, episode_length
 
+def get_weights(dataset, trainer):
+
+    semi_s_weight = []
+    semi_a_weight = []
+    semi_s_or_a_weight = []
+    semi_s_and_a_weight = []
+    true_sa_weight = []
+
+    for i in range(0,len(dataset["observations"]),32768):
+        end_idx = min(i+32768,len(dataset["observations"]))
+
+        obs = torch.tensor(dataset["observations"][i:end_idx], dtype=torch.float32).to(trainer.device)
+        next_obs = torch.tensor(dataset["next_observations"][i:end_idx], dtype=torch.float32).to(trainer.device)
+        actions = torch.tensor(dataset["actions"][i:end_idx], dtype=torch.float32).to(trainer.device)
+        rewards = torch.tensor(dataset["rewards"][i:end_idx], dtype=torch.float32).to(trainer.device)
+        terminals = torch.tensor(dataset["terminals"][i:end_idx], dtype=torch.float32).to(trainer.device)
+
+        semi_s, semi_a, true_sa = trainer.get_weights(obs, 
+                                                        next_obs, 
+                                                        actions, 
+                                                        rewards, 
+                                                        terminals)
+        semi_s_weight.append(semi_s.cpu().numpy())
+        semi_a_weight.append(semi_a.cpu().numpy())
+        semi_s_or_a_weight.append(torch.max(semi_s, semi_a).cpu().numpy())
+        semi_s_and_a_weight.append((semi_s * semi_a).cpu().numpy())
+        true_sa_weight.append(true_sa.cpu().numpy())
+
+    semi_s_weight = np.hstack(semi_s_weight)
+    semi_s_weight = semi_s_weight > 0
+    
+    semi_a_weight = np.hstack(semi_a_weight)
+    semi_a_weight = semi_a_weight > 0
+    
+    semi_s_or_a_weight = np.hstack(semi_s_or_a_weight)
+    semi_s_or_a_weight = semi_s_or_a_weight > 0
+    
+    semi_s_and_a_weight = np.hstack(semi_s_and_a_weight)
+    semi_s_and_a_weight = semi_s_and_a_weight > 0
+
+    true_sa_weight = np.hstack(true_sa_weight)
+    true_sa_weight = true_sa_weight > 0
+
+
+    return semi_s_weight, semi_a_weight, semi_s_or_a_weight, semi_s_and_a_weight, true_sa_weight
+
+def draw_traj(weights, dataset, env, save_path=None):
+    # select the observation in dataset with weights > 0
+    selected_obs = dataset["observations"][weights]
+    selected_next_obs = dataset["next_observations"][weights]
+    selected_terminals = dataset["terminals"][weights]
+    selected_traj_img = env.get_env_frame_with_selected_traj(obs=selected_obs, 
+                                                            next_obs=selected_next_obs,
+                                                            terminals=selected_terminals,
+                                                            save_path=save_path)
 
 @pyrallis.wrap()
 def train(config: TrainConfig):
@@ -770,7 +791,7 @@ def train(config: TrainConfig):
         dataset["next_observations"], state_mean, state_std
     )
     env = wrap_env(env, state_mean=state_mean, state_std=state_std)
-
+    
     replay_buffer = ReplayBuffer(
         state_dim,
         action_dim,
@@ -780,14 +801,25 @@ def train(config: TrainConfig):
     replay_buffer.load_d4rl_dataset(dataset)
 
 
-    config.vdice_lambda = config.semi_vdice_lambda
     semi_trainer = trainer_init(config, env)
 
 
     wandb_init(asdict(config))
-    evaluations = []
     t = 0
 
+
+    temp_dataset = {}
+    temp_dataset["observations"] = dataset["observations"][:2000]
+    temp_dataset["actions"] = dataset["actions"][:2000]
+    temp_dataset["rewards"] = dataset["rewards"][:2000]
+    temp_dataset["next_observations"] = dataset["next_observations"][:2000]
+    temp_dataset["terminals"] = dataset["terminals"][:2000]
+
+    if config.checkpoints_path is not None:
+        weights = np.ones(2000, dtype=bool)
+        save_dir = config.checkpoints_path + "/selected_traj/"
+        os.makedirs(save_dir, exist_ok=True)
+        draw_traj(weights, temp_dataset, env, save_path = save_dir + "/full.png")
 
     while t < int(config.max_timesteps):
         
@@ -800,11 +832,11 @@ def train(config: TrainConfig):
         wandb.log(semi_log_dict,)
 
         if (t + 1) % config.eval_freq == 0:
-            eval_policy(semi_trainer.semi_sa_actor_and, t, config.checkpoints_path+"/semi_s_and_a/gif", config.device, wandb, "semi_s_and_a")
-            eval_policy(semi_trainer.semi_sa_actor_or, t, config.checkpoints_path+"/semi_s_or_a/gif", config.device, wandb, "semi_s_or_a")
-            eval_policy(semi_trainer.semi_s_actor, t, config.checkpoints_path+"/semi_s/gif", config.device, wandb, "semi_s")
-            eval_policy(semi_trainer.semi_a_actor, t, config.checkpoints_path+"/semi_a/gif", config.device, wandb, "semi_a")
-            eval_policy(semi_trainer.true_sa_actor, t, config.checkpoints_path+"/true_s_and_a/gif", config.device, wandb, "true_s_and_a")
+            eval_policy(semi_trainer.semi_sa_actor_and, t, config.checkpoints_path+"/gif/semi_s_and_a", config.device, wandb, "semi_s_and_a_perform")
+            eval_policy(semi_trainer.semi_sa_actor_or, t, config.checkpoints_path+"/gif/semi_s_or_a", config.device, wandb, "semi_s_or_a_perform")
+            eval_policy(semi_trainer.semi_s_actor, t, config.checkpoints_path+"/gif/semi_s", config.device, wandb, "semi_s_perform")
+            eval_policy(semi_trainer.semi_a_actor, t, config.checkpoints_path+"/gif/semi_a", config.device, wandb, "semi_a_perform")
+            eval_policy(semi_trainer.true_sa_actor, t, config.checkpoints_path+"/gif/true_s_and_a", config.device, wandb, "true_s_and_a_perform")
             print("==============================")
 
         if (t + 1) % config.save_freq == 0:
@@ -813,19 +845,22 @@ def train(config: TrainConfig):
                     semi_trainer.state_dict(),
                     os.path.join(config.checkpoints_path+"/model", f"checkpoint_{t}.pt"),
                 )
+                
 
-                # a_weights, s_weights, semi_v = semidice_result_no_vtarget(dataset, semi_trainer, config)
-                # action_ratio_filter = a_weights > 0
-                # state_ratio_filter = s_weights > 0
-                # or_ratio_filter = np.logical_or(a_weights > 0, s_weights > 0)
-                # and_ratio_filter = np.logical_and(a_weights > 0, s_weights > 0)
+                semi_s_weight, semi_a_weight, semi_s_or_a_weight, semi_s_and_a_weight, true_sa_weight = get_weights(temp_dataset, semi_trainer)
+                weights_dict = {
+                    "semi_s": semi_s_weight,
+                    "semi_a": semi_a_weight,
+                    "semi_s_or_a": semi_s_or_a_weight,
+                    "semi_s_and_a": semi_s_and_a_weight,
+                    "true_s_and_a": true_sa_weight
+                }
+                for key, weights in weights_dict.items():
+                    save_dir = config.checkpoints_path + "/selected_traj/" + key
+                    os.makedirs(save_dir, exist_ok=True)
+                    draw_traj(weights, temp_dataset, env, save_path = save_dir + "/" + str(t) + ".png")
 
 
-                # # save dataset id
-                # np.save(os.path.join(config.checkpoints_path+"_action_ratio_id", f"checkpoint_{t}.npy"), dataset["id"][action_ratio_filter])
-                # np.save(os.path.join(config.checkpoints_path+"_state_ratio_id", f"checkpoint_{t}.npy"), dataset["id"][state_ratio_filter])
-                # np.save(os.path.join(config.checkpoints_path+"_or_ratio_id", f"checkpoint_{t}.npy"), dataset["id"][or_ratio_filter])
-                # np.save(os.path.join(config.checkpoints_path+"_and_ratio_id", f"checkpoint_{t}.npy"), dataset["id"][and_ratio_filter])
         t += 1
 
 
