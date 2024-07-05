@@ -112,7 +112,13 @@ def wandb_init(config: dict) -> None:
 
 
     wandb.define_metric("vdice_step")
+    wandb.define_metric("selected_traj_step")
+    wandb.define_metric("policy_step")
+
+
     wandb.define_metric("vdice_train/*", step_metric="vdice_step")
+    wandb.define_metric("selected_traj/*", step_metric="selected_traj_step")
+    wandb.define_metric("policy_train/*", step_metric="policy_step")
 
 
 def frenchel_dual(name, x):
@@ -671,7 +677,8 @@ def create_dataset(config: TrainConfig):
     env = PointMassEnv(start=np.array([12.5, 4.5], dtype=np.float32), 
                                 goal=np.array([4.5, 12.5], dtype=np.float32), 
                                 goal_radius=0.8)
-    dataset = np.load("dataset.npy", allow_pickle=True)
+    # dataset = np.load("dataset.npy", allow_pickle=True)
+    dataset = np.load("noise_45_dataset.npy", allow_pickle=True)
     state_dim = env.observation_space.shape[0]
     action_dim = env.action_space.shape[0]
     dataset["id"] = np.arange(dataset["actions"].shape[0])
@@ -708,13 +715,13 @@ def eval_policy(actor, global_step, gif_dir, device, wandb, name):
     imageio.mimsave(gif_dir + "/" +str(global_step) + ".gif", images, fps=10)
     success_rate = count_success / 1.0
 
-    wandb.log(
-                {"vdice_train/"+name: success_rate,
-                #  "policy_train": global_step,
-                 },
-            )
+    # wandb.log(
+    #             {"vdice_train/"+name: success_rate,
+    #             #  "policy_train": global_step,
+    #              },
+    #         )
     print(name+f" Success rate: {success_rate}")
-    return episode_return, episode_length
+    return success_rate
 
 def get_weights(dataset, trainer):
 
@@ -771,6 +778,8 @@ def draw_traj(weights, dataset, env, save_path=None):
                                                             next_obs=selected_next_obs,
                                                             terminals=selected_terminals,
                                                             save_path=save_path)
+    
+    return selected_traj_img
 
 @pyrallis.wrap()
 def train(config: TrainConfig):
@@ -819,8 +828,11 @@ def train(config: TrainConfig):
         weights = np.ones(2000, dtype=bool)
         save_dir = config.checkpoints_path + "/selected_traj/"
         os.makedirs(save_dir, exist_ok=True)
-        draw_traj(weights, temp_dataset, env, save_path = save_dir + "/full.png")
-
+        full_traj = draw_traj(weights, temp_dataset, env, save_path = save_dir + "/full.png")
+        wandb.log({"selected_traj/" + "full_traj": wandb.Image(np.moveaxis(np.transpose(full_traj), 0, -1)),
+                   "selected_traj_step" : 0,
+                   })
+        
     while t < int(config.max_timesteps):
         
 
@@ -832,11 +844,14 @@ def train(config: TrainConfig):
         wandb.log(semi_log_dict,)
 
         if (t + 1) % config.eval_freq == 0:
-            eval_policy(semi_trainer.semi_sa_actor_and, t, config.checkpoints_path+"/gif/semi_s_and_a", config.device, wandb, "semi_s_and_a_perform")
-            eval_policy(semi_trainer.semi_sa_actor_or, t, config.checkpoints_path+"/gif/semi_s_or_a", config.device, wandb, "semi_s_or_a_perform")
-            eval_policy(semi_trainer.semi_s_actor, t, config.checkpoints_path+"/gif/semi_s", config.device, wandb, "semi_s_perform")
-            eval_policy(semi_trainer.semi_a_actor, t, config.checkpoints_path+"/gif/semi_a", config.device, wandb, "semi_a_perform")
-            eval_policy(semi_trainer.true_sa_actor, t, config.checkpoints_path+"/gif/true_s_and_a", config.device, wandb, "true_s_and_a_perform")
+            policy_log_dict = {}
+            policy_log_dict["policy_train/semi_s_and_a_perform"] = eval_policy(semi_trainer.semi_sa_actor_and, t, config.checkpoints_path+"/gif/semi_s_and_a", config.device, wandb, "semi_s_and_a_perform")
+            policy_log_dict["policy_train/semi_s_or_a_perform"] = eval_policy(semi_trainer.semi_sa_actor_or, t, config.checkpoints_path+"/gif/semi_s_or_a", config.device, wandb, "semi_s_or_a_perform")
+            policy_log_dict["policy_train/semi_s_perform"] = eval_policy(semi_trainer.semi_s_actor, t, config.checkpoints_path+"/gif/semi_s", config.device, wandb, "semi_s_perform")
+            policy_log_dict["policy_train/semi_a_perform"] = eval_policy(semi_trainer.semi_a_actor, t, config.checkpoints_path+"/gif/semi_a", config.device, wandb, "semi_a_perform")
+            policy_log_dict["policy_train/true_s_and_a_perform"] = eval_policy(semi_trainer.true_sa_actor, t, config.checkpoints_path+"/gif/true_s_and_a", config.device, wandb, "true_s_and_a_perform")
+            policy_log_dict["policy_step"] = t 
+            wandb.log(policy_log_dict,)
             print("==============================")
 
         if (t + 1) % config.save_freq == 0:
@@ -858,8 +873,16 @@ def train(config: TrainConfig):
                 for key, weights in weights_dict.items():
                     save_dir = config.checkpoints_path + "/selected_traj/" + key
                     os.makedirs(save_dir, exist_ok=True)
-                    draw_traj(weights, temp_dataset, env, save_path = save_dir + "/" + str(t) + ".png")
-
+                    selected_img  = draw_traj(weights, temp_dataset, env, save_path = save_dir + "/" + str(t) + ".png")
+                    weights_dict[key] = selected_img
+                
+                wandb.log({"selected_traj/" + "semi_s": wandb.Image(np.moveaxis(np.transpose(weights_dict["semi_s"]), 0, -1)),
+                           "selected_traj/" + "semi_a": wandb.Image(np.moveaxis(np.transpose(weights_dict["semi_a"]), 0, -1)),
+                           "selected_traj/" + "semi_s_or_a": wandb.Image(np.moveaxis(np.transpose(weights_dict["semi_s_or_a"]), 0, -1)),
+                           "selected_traj/" + "semi_s_and_a": wandb.Image(np.moveaxis(np.transpose(weights_dict["semi_s_and_a"]), 0, -1)),
+                           "selected_traj/" + "true_s_and_a": wandb.Image(np.moveaxis(np.transpose(weights_dict["true_s_and_a"]), 0, -1)),
+                           "selected_traj_step" : t,
+                           },)
 
         t += 1
 

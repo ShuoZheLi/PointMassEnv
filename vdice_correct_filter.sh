@@ -3,14 +3,15 @@
 # List of session names
 env_1="antmaze-umaze-v2"
 env_2="antmaze-umaze-v2"
-project="toy_hyper"
+project="noise_45_dataset"
 conda_env="corl_0"
-checkpoints_path_base="toy_hyper"
+checkpoints_path_base="noise_45_dataset"
 
 normalize_state=(False)
 normalize_reward_values=(True False)
 discount_values=(0.976 0.99)
-true_dice_alpha_values=(0.5 1 100)
+# true_dice_alpha_values=(0.5 1 10 100)
+true_dice_alpha_values=(1.5 2 4)
 semi_dice_lambda_values=(0.3)
 
 seed=(100)
