@@ -64,20 +64,25 @@ class Args:
     autotune: bool = True
     """automatic tuning of the entropy coefficient"""
     save_model: bool = False
+    """if toggled, the model will be saved every 10000 steps"""
+
+    env_name: str = "FourRooms"
+    """the name of the environment"""
 
 
-def make_env(env_id, seed, idx, capture_video, run_name):
+def make_env(env_id, seed, idx, capture_video, run_name, env_name="FourRooms"):
     def thunk():
         if capture_video and idx == 0:
-            # env = gym.make(env_id, render_mode="rgb_array")
             env = PointMassEnv(start=np.array([12.5, 4.5], dtype=np.float32), 
                                goal=np.array([4.5, 12.5], dtype=np.float32), 
-                               goal_radius=0.8)
+                               goal_radius=0.8,
+                               env_name=env_name)
             env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
         else:
             env = PointMassEnv(start=np.array([12.5, 4.5], dtype=np.float32), 
                                goal=np.array([4.5, 12.5], dtype=np.float32), 
-                               goal_radius=0.8)
+                               goal_radius=0.8,
+                               env_name=env_name)
         env = gym.wrappers.RecordEpisodeStatistics(env)
         env.action_space.seed(seed)
         return env
@@ -154,7 +159,8 @@ class Actor(nn.Module):
 def eval_policy(actor, global_step, gif_dir):
     env = PointMassEnv(start=np.array([12.5, 4.5], dtype=np.float32), 
                                goal=np.array([4.5, 12.5], dtype=np.float32), 
-                               goal_radius=0.8)
+                               goal_radius=0.8,
+                               env_name=args.env_name)
     
     actor.eval()
     images = []
@@ -224,7 +230,12 @@ poetry run pip install "stable_baselines3==2.0.0a1"
     device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
 
     # env setup
-    envs = gym.vector.SyncVectorEnv([make_env(args.env_id, args.seed, 0, args.capture_video, run_name)])
+    envs = gym.vector.SyncVectorEnv([make_env(env_id=args.env_id,
+                                              seed=args.seed, 
+                                              idx=0, 
+                                              capture_video=args.capture_video, 
+                                              run_name=run_name,
+                                              env_name=args.env_name)])
     assert isinstance(envs.single_action_space, gym.spaces.Box), "only continuous action space is supported"
 
     

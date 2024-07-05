@@ -7,47 +7,8 @@ from typing import Union, Optional
 from gymnasium.spaces import Space
 from PIL import Image, ImageDraw
 import pickle
+from WALLS import WALLS
 
-WALLS = {
-        'FourRooms':
-                np.array([
-                    [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
-                    [1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,1],
-                    [1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,1],
-                    [1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,1],
-                    [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1], ## tunnel
-                    [1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,1],
-                    [1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,1], 
-                    [1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,1],
-                    [1,1,1,1,0,1,1,1,1,1,1,1,0,1,1,1,1], ## tunnel
-                    [1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,1],
-                    [1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,1],
-                    [1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,1],
-                    [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1], ## tunnel
-                    [1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,1],
-                    [1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,1],
-                    [1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,1],
-                    [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
-                ]),
-
-        'FourRoomsBounds':
-                np.array([
-                    # x1, y1, x2, y2
-                    (0, 0, 17, 1),     # Left wall
-                    (0, 16, 17, 17),   # Right wall
-                    (0, 0, 1, 17),     # Top wall
-                    (16, 0, 17, 17),   # Bottom wall
-                    
-                    (1, 8, 4, 9),     # middle up wall
-                    (5, 8, 12, 9),     # middle mid wall
-                    (13, 8, 16, 9),     # middle down wall
-
-                    (8, 1, 9, 4),       # middle left wall
-                    (8, 5, 9, 12),      # middle mid wall
-                    (8, 13, 9, 16),     # middle right wall
-                ]), 
-
-}
 
 
 def resize_walls(walls, factor):
@@ -480,7 +441,7 @@ if __name__ == '__main__':
     start_pos = [[12.5, 4.5]]
     goal = [[4.5, 12.5]]
 
-    env = PointMassEnv(start=np.array(start_pos[0], dtype=np.float32),)
+    env = PointMassEnv(start=np.array(start_pos[0], dtype=np.float32), env_name="EmptyRoom",)
     env._goal = np.array(goal[-1], dtype=np.float32)
     obs, _ = env.reset()
     
@@ -492,18 +453,18 @@ if __name__ == '__main__':
             if event.type == pygame.QUIT:
                 running = False
 
-        # img = env.render()
+        img = env.render()
 
         # trajectories = [[[0,0],[1,1],[2,2]], [[3,3],[4,4],[5,5]]]
         # img = env.get_env_frame_with_traj(obs, env._goal, trajectories)
 
         # trajectories = np.load('dataset.npy', allow_pickle=True)
 
-        with open('dataset.npy', 'rb') as f:
-            trajectories = pickle.load(f)
+        # with open('dataset.npy', 'rb') as f:
+        #     trajectories = pickle.load(f)
 
-        trajectories = trajectories['trajectories']
-        img = env.get_env_frame_with_traj(obs, env._goal, trajectories)
+        # trajectories = trajectories['trajectories']
+        # img = env.get_env_frame_with_traj(obs, env._goal, trajectories)
 
         img_surface = pygame.surfarray.make_surface(img)
         screen.blit(img_surface, (0, 0))
