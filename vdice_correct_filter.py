@@ -89,6 +89,8 @@ class TrainConfig:
     vdice_type: Optional[str] = "semi"
     semi_dice_lambda: float = 0.3
     true_dice_alpha: float = 1.0
+    env_name: str = "FourRooms"
+    reward_type: str = "sparse"
     
 
     def __post_init__(self):
@@ -676,9 +678,10 @@ def create_dataset(config: TrainConfig):
 
     env = PointMassEnv(start=np.array([12.5, 4.5], dtype=np.float32), 
                                 goal=np.array([4.5, 12.5], dtype=np.float32), 
-                                goal_radius=0.8)
-    # dataset = np.load("dataset.npy", allow_pickle=True)
-    dataset = np.load("noise_45_dataset.npy", allow_pickle=True)
+                                goal_radius=0.8,
+                                env_name=config.env_name,
+                                reward_type=config.reward_type)
+    dataset = np.load("dataset.npy", allow_pickle=True)
     state_dim = env.observation_space.shape[0]
     action_dim = env.action_space.shape[0]
     dataset["id"] = np.arange(dataset["actions"].shape[0])
@@ -689,7 +692,9 @@ def create_dataset(config: TrainConfig):
 def eval_policy(actor, global_step, gif_dir, device, wandb, name):
     env = PointMassEnv(start=np.array([12.5, 4.5], dtype=np.float32), 
                                goal=np.array([4.5, 12.5], dtype=np.float32), 
-                               goal_radius=0.8)
+                               goal_radius=0.8,
+                               env_name=config.env_name,
+                               reward_type=config.reward_type)
     
     actor.eval()
     images = []
@@ -888,4 +893,5 @@ def train(config: TrainConfig):
 
 
 if __name__ == "__main__":
+    config = pyrallis.parse(config_class=TrainConfig)
     train()

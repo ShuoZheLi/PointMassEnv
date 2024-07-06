@@ -3,15 +3,16 @@
 # List of session names
 env_1="antmaze-umaze-v2"
 env_2="antmaze-umaze-v2"
-project="noise_45_dataset"
+env_name="EmptyRoom"
+project="empty_room"
 conda_env="corl_0"
-checkpoints_path_base="noise_45_dataset"
+checkpoints_path_base="empty_room"
 
 normalize_state=(False)
 normalize_reward_values=(True False)
-discount_values=(0.976 0.99)
+discount_values=(0.92 0.99)
 # true_dice_alpha_values=(0.5 1 10 100)
-true_dice_alpha_values=(1.5 2 4)
+true_dice_alpha_values=(1 1.5 2 4)
 semi_dice_lambda_values=(0.3)
 
 seed=(100)
@@ -49,6 +50,7 @@ for normalize_reward in "${normalize_reward_values[@]}"; do
           # Start the experiment with the specified parameters
           tmux send-keys -t $session_name "CUDA_VISIBLE_DEVICES=$device \
                                           python3 vdice_correct_filter.py \
+                                          --env_name $env_name \
                                           --env_1 $env_1 \
                                           --env_2 $env_2 \
                                           --normalize_reward $normalize_reward \
@@ -56,7 +58,7 @@ for normalize_reward in "${normalize_reward_values[@]}"; do
                                           --discount $discount \
                                           --semi_dice_lambda $semi_dice_lambda \
                                           --seed $current_seed \
-                                          --max_timesteps 2000000 \
+                                          --max_timesteps 1000000 \
                                           --project $project \
                                           --checkpoints_path $checkpoints_path" C-m
 

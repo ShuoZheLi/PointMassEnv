@@ -68,21 +68,24 @@ class Args:
 
     env_name: str = "FourRooms"
     """the name of the environment"""
+    reward_type: str = "sparse"
 
 
-def make_env(env_id, seed, idx, capture_video, run_name, env_name="FourRooms"):
+def make_env(env_id, seed, idx, capture_video, run_name, env_name="FourRooms", reward_type="sparse"):
     def thunk():
         if capture_video and idx == 0:
             env = PointMassEnv(start=np.array([12.5, 4.5], dtype=np.float32), 
                                goal=np.array([4.5, 12.5], dtype=np.float32), 
                                goal_radius=0.8,
-                               env_name=env_name)
+                               env_name=env_name,
+                               reward_type=reward_type)
             env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
         else:
             env = PointMassEnv(start=np.array([12.5, 4.5], dtype=np.float32), 
                                goal=np.array([4.5, 12.5], dtype=np.float32), 
                                goal_radius=0.8,
-                               env_name=env_name)
+                               env_name=env_name,
+                               reward_type=reward_type)
         env = gym.wrappers.RecordEpisodeStatistics(env)
         env.action_space.seed(seed)
         return env
@@ -160,7 +163,8 @@ def eval_policy(actor, global_step, gif_dir):
     env = PointMassEnv(start=np.array([12.5, 4.5], dtype=np.float32), 
                                goal=np.array([4.5, 12.5], dtype=np.float32), 
                                goal_radius=0.8,
-                               env_name=args.env_name)
+                               env_name=args.env_name,
+                               reward_type=args.reward_type)
     
     actor.eval()
     images = []
@@ -184,6 +188,7 @@ def eval_policy(actor, global_step, gif_dir):
     actor.train()
     # save images into gif
     imageio.mimsave(gif_dir + "/" +str(global_step) + ".gif", images, fps=10)
+    wandb.log({"policy performance": wandb.Video(gif_dir + "/" +str(global_step) + ".gif", fps=10, format="gif")})
     print(f"Success rate: {count_success / 1.0}")
     return episode_return, episode_length
 
@@ -235,7 +240,8 @@ poetry run pip install "stable_baselines3==2.0.0a1"
                                               idx=0, 
                                               capture_video=args.capture_video, 
                                               run_name=run_name,
-                                              env_name=args.env_name)])
+                                              env_name=args.env_name,
+                                              reward_type=args.reward_type)])
     assert isinstance(envs.single_action_space, gym.spaces.Box), "only continuous action space is supported"
 
     

@@ -34,6 +34,7 @@ class PointMassEnv(gym.Env[np.ndarray, Union[int, np.ndarray]]):
 
     def __init__(self,
                 env_name='FourRooms',
+                reward_type='sparse',
                 start=None,
                 goal=None,
                 resize_factor=1,
@@ -53,6 +54,7 @@ class PointMassEnv(gym.Env[np.ndarray, Union[int, np.ndarray]]):
             start_bounds: starting bound
         """
         walls = env_name
+        self._reward_type = reward_type
 
         if resize_factor > 1:
             self._walls = resize_walls(WALLS[walls], resize_factor)
@@ -124,16 +126,13 @@ class PointMassEnv(gym.Env[np.ndarray, Union[int, np.ndarray]]):
     #     return img
     
     def reward(self, state):
-        # max_dist = np.linalg.norm(self._start - self._goal)
-        # reward = (max_dist - np.linalg.norm(state - self._goal)) / max_dist
-        # if self.check_success(state):
-        #     reward = 10
-
         reward = 0
-        if self.check_success(state):
-            reward = 1
 
-        # reward = - np.linalg.norm(state - self._goal)
+        if self._reward_type == 'sparse':
+            if self.check_success(state):
+                reward = 1
+        else:
+            reward = - np.linalg.norm(state - self._goal)
 
         return reward
     
