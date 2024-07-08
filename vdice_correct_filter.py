@@ -91,6 +91,7 @@ class TrainConfig:
     true_dice_alpha: float = 1.0
     env_name: str = "FourRooms"
     reward_type: str = "sparse"
+    percent_expert: float = 0
     
 
     def __post_init__(self):
@@ -115,11 +116,13 @@ def wandb_init(config: dict) -> None:
 
     wandb.define_metric("vdice_step")
     wandb.define_metric("selected_traj_step")
+    wandb.define_metric("selected_expert_traj_step")
     wandb.define_metric("policy_step")
 
 
     wandb.define_metric("vdice_train/*", step_metric="vdice_step")
     wandb.define_metric("selected_traj/*", step_metric="selected_traj_step")
+    wandb.define_metric("selected_expert_traj/*", step_metric="selected_expert_traj_step")
     wandb.define_metric("policy_train/*", step_metric="policy_step")
 
 
@@ -682,12 +685,22 @@ def create_dataset(config: TrainConfig):
                                 env_name=config.env_name,
                                 reward_type=config.reward_type)
     dataset = np.load("dataset.npy", allow_pickle=True)
+    expert_dataset = np.load("expert_dataset.npy", allow_pickle=True)
+
+    expert_idx = np.random.choice(np.arange(int(1e6)), int(config.percent_expert * 1e6), replace=False)
+    dataset["observations"][expert_idx] = expert_dataset["observations"][expert_idx]
+    dataset["actions"][expert_idx] = expert_dataset["actions"][expert_idx]
+    dataset["rewards"][expert_idx] = expert_dataset["rewards"][expert_idx]
+    dataset["next_observations"][expert_idx] = expert_dataset["next_observations"][expert_idx]
+    dataset["terminals"][expert_idx] = expert_dataset["terminals"][expert_idx]
+
+
     state_dim = env.observation_space.shape[0]
     action_dim = env.action_space.shape[0]
     dataset["id"] = np.arange(dataset["actions"].shape[0])
 
 
-    return dataset, state_dim, action_dim, env
+    return dataset, expert_dataset, state_dim, action_dim, env
 
 def eval_policy(actor, global_step, gif_dir, device, wandb, name):
     env = PointMassEnv(start=np.array([12.5, 4.5], dtype=np.float32), 
@@ -788,10 +801,11 @@ def draw_traj(weights, dataset, env, save_path=None):
 
 @pyrallis.wrap()
 def train(config: TrainConfig):
-    dataset, state_dim, action_dim, env = create_dataset(config)
+    dataset, expert_dataset, state_dim, action_dim, env = create_dataset(config)
 
     if config.normalize_reward:
         modify_reward(dataset, config.env_1)
+        modify_reward(expert_dataset, config.env_1)
 
     if config.normalize:
         state_mean, state_std = compute_mean_std(dataset["observations"], eps=1e-3)
@@ -828,6 +842,13 @@ def train(config: TrainConfig):
     temp_dataset["rewards"] = dataset["rewards"][:2000]
     temp_dataset["next_observations"] = dataset["next_observations"][:2000]
     temp_dataset["terminals"] = dataset["terminals"][:2000]
+
+    temp_expert_dataset = {}
+    temp_expert_dataset["observations"] = expert_dataset["observations"][:2000]
+    temp_expert_dataset["actions"] = expert_dataset["actions"][:2000]
+    temp_expert_dataset["rewards"] = expert_dataset["rewards"][:2000]
+    temp_expert_dataset["next_observations"] = expert_dataset["next_observations"][:2000]
+    temp_expert_dataset["terminals"] = expert_dataset["terminals"][:2000]
 
     if config.checkpoints_path is not None:
         weights = np.ones(2000, dtype=bool)
@@ -887,6 +908,29 @@ def train(config: TrainConfig):
                            "selected_traj/" + "semi_s_and_a": wandb.Image(np.moveaxis(np.transpose(weights_dict["semi_s_and_a"]), 0, -1)),
                            "selected_traj/" + "true_s_and_a": wandb.Image(np.moveaxis(np.transpose(weights_dict["true_s_and_a"]), 0, -1)),
                            "selected_traj_step" : t,
+                           },)
+            
+
+                semi_s_weight, semi_a_weight, semi_s_or_a_weight, semi_s_and_a_weight, true_sa_weight = get_weights(temp_expert_dataset, semi_trainer)
+                weights_dict = {
+                    "semi_s": semi_s_weight,
+                    "semi_a": semi_a_weight,
+                    "semi_s_or_a": semi_s_or_a_weight,
+                    "semi_s_and_a": semi_s_and_a_weight,
+                    "true_s_and_a": true_sa_weight
+                }
+                for key, weights in weights_dict.items():
+                    save_dir = config.checkpoints_path + "/selected_expert_traj/" + key
+                    os.makedirs(save_dir, exist_ok=True)
+                    selected_img  = draw_traj(weights, temp_expert_dataset, env, save_path = save_dir + "/" + str(t) + ".png")
+                    weights_dict[key] = selected_img
+                
+                wandb.log({"selected_expert_traj/" + "semi_s": wandb.Image(np.moveaxis(np.transpose(weights_dict["semi_s"]), 0, -1)),
+                           "selected_expert_traj/" + "semi_a": wandb.Image(np.moveaxis(np.transpose(weights_dict["semi_a"]), 0, -1)),
+                           "selected_expert_traj/" + "semi_s_or_a": wandb.Image(np.moveaxis(np.transpose(weights_dict["semi_s_or_a"]), 0, -1)),
+                           "selected_expert_traj/" + "semi_s_and_a": wandb.Image(np.moveaxis(np.transpose(weights_dict["semi_s_and_a"]), 0, -1)),
+                           "selected_expert_traj/" + "true_s_and_a": wandb.Image(np.moveaxis(np.transpose(weights_dict["true_s_and_a"]), 0, -1)),
+                           "selected_expert_traj_step" : t,
                            },)
 
         t += 1

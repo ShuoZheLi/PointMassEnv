@@ -41,7 +41,7 @@ def gen_traj(actor, env, device, traj_dir, traj_num, transition_num):
 
     env = PointMassEnv(start=np.array([12.5, 4.5], dtype=np.float32), 
                                goal=np.array([4.5, 12.5], dtype=np.float32), 
-                               goal_radius=0.8)
+                               goal_radius=0.8, env_name="EmptyRoom")
     traj = []
     actor.eval()
     images = []
@@ -102,6 +102,6 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     actor = Actor(envs).to(device)
     actor.load("990000_actor.pth")
-    gen_traj(actor, envs, device, "dataset.npy", 90000000, transition_num=1_000_000)
+    gen_traj(actor, envs, device, "dataset.npy", 90000000, transition_num=1000)
 
 

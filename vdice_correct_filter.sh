@@ -9,11 +9,13 @@ conda_env="corl_0"
 checkpoints_path_base="empty_room"
 
 normalize_state=(False)
-normalize_reward_values=(True False)
-discount_values=(0.92 0.99)
+normalize_reward_values=(True)
+# discount_values=(0.92 0.99)
+discount_values=(0.99)
 # true_dice_alpha_values=(0.5 1 10 100)
 true_dice_alpha_values=(1 1.5 2 4)
 semi_dice_lambda_values=(0.3)
+percent_expert="0.5"
 
 seed=(100)
 GPUS=(0 1 2 3)
@@ -33,6 +35,8 @@ for normalize_reward in "${normalize_reward_values[@]}"; do
 
           # Construct the session name based on parameters
           session_name="${project}_normalize_reward_${normalize_reward}_true_dice_alpha_${true_dice_alpha}_discount_${discount}_semi_dice_lambda_${semi_dice_lambda}_seed_${current_seed}"
+          # append percent_expert
+          session_name="${session_name}_percent_expert_${percent_expert}"
 
           session_name="${session_name//./_}" # Replace dots with underscores
 
@@ -51,6 +55,7 @@ for normalize_reward in "${normalize_reward_values[@]}"; do
           tmux send-keys -t $session_name "CUDA_VISIBLE_DEVICES=$device \
                                           python3 vdice_correct_filter.py \
                                           --env_name $env_name \
+                                          --percent_expert $percent_expert \
                                           --env_1 $env_1 \
                                           --env_2 $env_2 \
                                           --normalize_reward $normalize_reward \

@@ -13,6 +13,7 @@ class TrainConfig:
     max_timesteps: int = int(6e6)  # Max time steps to run environment
     buffer_size: int = 2_000_000  # Replay buffer size
     batch_size: int = 256  # Batch size for all networks
+    # discount: float = 0.99  # Discount factor
     discount: float = 0.99  # Discount factor
 
     #############################
@@ -30,32 +31,36 @@ class TrainConfig:
     #############################
     # normalize: bool = True  # Normalize states
     normalize: bool = False  # Normalize states
-    # normalize_reward: bool = True  # Normalize reward
-    normalize_reward: bool = False  # Normalize reward
+    normalize_reward: bool = True  # Normalize reward
+    # normalize_reward: bool = False  # Normalize reward
     
     #############################
     ###### Wandb Logging ########
     #############################
-    project: str = "sub_semi_nns_nnr_l_5"
-    checkpoints_path: Optional[str] = "sub_semi_nns_nnr_l_5"
-    alg: str = "sub_semi_nns_nnr_l_5"
+    project: str = "test"
+    checkpoints_path: Optional[str] = "test"
+    alg: str = "test"
     env_1: str = "antmaze-umaze-v2"  # OpenAI gym environment name
     env_2: str = "antmaze-umaze-v2"  # OpenAI gym environment name
 
     #############################
     #### DICE Hyperparameters ###
     #############################
-    device: str = "cuda:3"
+    device: str = "cuda"
     vdice_type: Optional[str] = "semi"
-    semi_dice_lambda: float = 0.5
-    true_dice_alpha: float = 100.0
+    semi_dice_lambda: float = 0.3
+    true_dice_alpha: float = 2.0
+    env_name: str = "EmptyRoom"
+    reward_type: str = "sparse"
 
-def create_dataset():
+def create_dataset(file_path="dataset.npy"):
 
     env = PointMassEnv(start=np.array([12.5, 4.5], dtype=np.float32), 
                                 goal=np.array([4.5, 12.5], dtype=np.float32), 
-                                goal_radius=0.8)
-    dataset = np.load("dataset.npy", allow_pickle=True)
+                                goal_radius=0.8,
+                                env_name=config.env_name,
+                                reward_type=config.reward_type,)
+    dataset = np.load(file_path, allow_pickle=True)
     state_dim = env.observation_space.shape[0]
     action_dim = env.action_space.shape[0]
     dataset["id"] = np.arange(dataset["actions"].shape[0])
@@ -130,7 +135,9 @@ def draw_traj(weights, dataset, env, save_path=None):
 @pyrallis.wrap()
 def main(config: TrainConfig):
 
-    dataset, state_dim, action_dim, env = create_dataset()
+    dataset, state_dim, action_dim, env = create_dataset("dataset.npy")
+    expert_dataset, state_dim, action_dim, env = create_dataset("expert_dataset.npy")
+    dataset = expert_dataset
     max_action = float(env.action_space.high[0])
 
     actor = GaussianPolicy(
@@ -186,39 +193,39 @@ def main(config: TrainConfig):
     dataset["next_observations"] = dataset["next_observations"][:2000]
     dataset["terminals"] = dataset["terminals"][:2000]
 
-    i = 4999
-    while i < 3_000_000:
-        trainer.load_state_dict(
+    # i = 4999
+    # while i < 3_000_000:
+    #     trainer.load_state_dict(
 
-            torch.load("sub_semi_nns_nr_l_3/sub_semi_nns_nr_l_3-antmaze-umaze-v2-23b0e99f/model/checkpoint_"+ str(int(i))+".pt")
-            )
-        print("load model at checkpoint_" + str(int(i)))
-        semi_s_weight, semi_a_weight, semi_s_or_a_weight, semi_s_and_a_weight, true_sa_weight = get_weights(dataset, trainer)
-        # semi_s_or_a_weight = np.ones_like(semi_s_or_a_weight)
-        # import pdb; pdb.set_trace()
-        weights_dict = {
-            "semi_s_weight": semi_s_weight,
-            "semi_a_weight": semi_a_weight,
-            "semi_s_or_a_weight": semi_s_or_a_weight,
-            "semi_s_and_a_weight": semi_s_and_a_weight,
-            "true_sa_weight": true_sa_weight
-        }
-        for key, weights in weights_dict.items():
-            save_dir = "sub_semi_nns_nr_l_3/selected_traj/"+key
-            os.makedirs(save_dir, exist_ok=True)
-            draw_traj(weights, dataset, env, save_path = save_dir + "/" + str(int(i)) + ".png")
-            # draw_traj(semi_s_or_a_weight, dataset, env, save_path = "img/full.png")
-
-        i += 5000
-
-
-    # trainer.load_state_dict(
-    #         torch.load("sub_semi_nns_nnr_l_3/sub_semi_nns_nnr_l_3-antmaze-umaze-v2-6674febf/model/checkpoint_2324999.pt")
+    #         torch.load("sub_semi_nns_nr_l_3/sub_semi_nns_nr_l_3-antmaze-umaze-v2-23b0e99f/model/checkpoint_"+ str(int(i))+".pt")
     #         )
-    # semi_s_weight, semi_a_weight, semi_s_or_a_weight, semi_s_and_a_weight, true_sa_weight = get_weights(dataset, trainer)
+    #     print("load model at checkpoint_" + str(int(i)))
+    #     semi_s_weight, semi_a_weight, semi_s_or_a_weight, semi_s_and_a_weight, true_sa_weight = get_weights(dataset, trainer)
+    #     # semi_s_or_a_weight = np.ones_like(semi_s_or_a_weight)
+    #     # import pdb; pdb.set_trace()
+    #     weights_dict = {
+    #         "semi_s_weight": semi_s_weight,
+    #         "semi_a_weight": semi_a_weight,
+    #         "semi_s_or_a_weight": semi_s_or_a_weight,
+    #         "semi_s_and_a_weight": semi_s_and_a_weight,
+    #         "true_sa_weight": true_sa_weight
+    #     }
+    #     for key, weights in weights_dict.items():
+    #         save_dir = "sub_semi_nns_nr_l_3/selected_traj/"+key
+    #         os.makedirs(save_dir, exist_ok=True)
+    #         draw_traj(weights, dataset, env, save_path = save_dir + "/" + str(int(i)) + ".png")
+    #         # draw_traj(semi_s_or_a_weight, dataset, env, save_path = "img/full.png")
+
+    #     i += 5000
+
+
+    trainer.load_state_dict(
+            torch.load("empty_room/empty_room_normalize_reward_True_true_dice_alpha_2_discount_0_99_semi_dice_lambda_0_3_seed_100/test-antmaze-umaze-v2-a79f1170/model/checkpoint_999999.pt")
+            )
+    semi_s_weight, semi_a_weight, semi_s_or_a_weight, semi_s_and_a_weight, true_sa_weight = get_weights(dataset, trainer)
     # semi_s_weight = np.ones_like(semi_s_weight)
-    # # import pdb; pdb.set_trace()
-    # draw_traj(semi_s_weight, dataset, env, save_path = "sub_semi_nns_nr_l_3/full.png")
+    # import pdb; pdb.set_trace()
+    draw_traj(true_sa_weight, dataset, env, save_path = "true_sa_weight.png")
     
 
     
@@ -226,4 +233,5 @@ def main(config: TrainConfig):
 
 
 if __name__ == "__main__":
+    config = pyrallis.parse(config_class=TrainConfig)
     main()
