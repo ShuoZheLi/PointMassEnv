@@ -1,4 +1,4 @@
-from sac import Actor
+from online_RL.sac import Actor
 import torch
 import numpy as np
 from PointMassEnv import PointMassEnv

@@ -27,7 +27,7 @@ class Args:
     """if toggled, `torch.backends.cudnn.deterministic=False`"""
     cuda: bool = True
     """if toggled, cuda will be enabled by default"""
-    track: bool = False
+    track: bool = True
     """if toggled, this experiment will be tracked with Weights and Biases"""
     wandb_project_name: str = "cleanRL"
     """the wandb's project name"""
@@ -67,8 +67,8 @@ class Args:
     """if toggled, the model will be saved every 10000 steps"""
 
     env_name: str = "FourRooms"
-    """the name of the environment"""
     reward_type: str = "sparse"
+    discrete_action: bool = False
 
 
 def make_env(env_id, seed, idx, capture_video, run_name, env_name="FourRooms", reward_type="sparse"):
@@ -192,6 +192,24 @@ def eval_policy(actor, global_step, gif_dir):
     print(f"Success rate: {count_success / 1.0}")
     return episode_return, episode_length
 
+def discrete_action(action):
+    for i in range(envs.num_envs):
+        x, y = action[i]
+        if x < -0.5:
+            x = -1
+        elif x > 0.5:
+            x = 1
+        else:
+            x = 0
+        if y < -0.5:
+            y = -1
+        elif y > 0.5:
+            y = 1
+        else:
+            y = 0
+        action[i] = [x, y]
+    return action
+
 if __name__ == "__main__":
     import stable_baselines3 as sb3
 
@@ -286,8 +304,12 @@ poetry run pip install "stable_baselines3==2.0.0a1"
             actions, _, _ = actor.get_action(torch.Tensor(obs).to(device))
             actions = actions.detach().cpu().numpy()
 
+        exec_actions = actions
+        if args.discrete_action:
+            exec_actions = discrete_action(np.copy(exec_actions))
+
         # TRY NOT TO MODIFY: execute the game and log data.
-        next_obs, rewards, terminations, truncations, infos = envs.step(actions)
+        next_obs, rewards, terminations, truncations, infos = envs.step(exec_actions)
 
         # TRY NOT TO MODIFY: record rewards for plotting purposes
         if "final_info" in infos:

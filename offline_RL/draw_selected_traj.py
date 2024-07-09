@@ -1,4 +1,4 @@
-from vdice_correct_filter import *
+from offline_RL.vdice_correct_filter import *
 
 @dataclass
 class TrainConfig:

@@ -20,7 +20,7 @@ from torch.distributions import Normal
 from torch.optim.lr_scheduler import CosineAnnealingLR
 # import suboptimal_offline_datasets
 from torch import autograd
-from utils import TwinQ, ValueFunction, GaussianPolicy, DeterministicPolicy, \
+from offline_RL.utils import TwinQ, ValueFunction, GaussianPolicy, DeterministicPolicy, \
                     ReplayBuffer, MLP, TwinV, soft_update, set_seed, compute_mean_std, \
                     eval_actor, return_reward_range, modify_reward, normalize_states, \
                     wrap_env, BcLearning, qlearning_dataset
