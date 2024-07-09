@@ -10,7 +10,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-import tyro
+import pyrallis
 from stable_baselines3.common.buffers import ReplayBuffer
 from torch.utils.tensorboard import SummaryWriter
 from PointMassEnv import PointMassEnv
@@ -69,6 +69,7 @@ class Args:
     env_name: str = "FourRooms"
     reward_type: str = "sparse"
     discrete_action: bool = False
+    checkpoints_path: str = "checkpoints"
 
 
 def make_env(env_id, seed, idx, capture_video, run_name, env_name="FourRooms", reward_type="sparse"):
@@ -220,8 +221,8 @@ poetry run pip install "stable_baselines3==2.0.0a1"
 """
         )
 
-    args = tyro.cli(Args)
-    run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
+    args = pyrallis.parse(config_class=Args)
+    run_name = args.checkpoints_path
     if args.track:
         import wandb
 
@@ -234,9 +235,9 @@ poetry run pip install "stable_baselines3==2.0.0a1"
             monitor_gym=True,
             save_code=True,
         )
-    writer = SummaryWriter(f"runs/{run_name}")
-    gif_dir = f"runs/{run_name}/gifs/"
-    model_dir = f"runs/{run_name}/models/"
+    writer = SummaryWriter(f"sac/{run_name}")
+    gif_dir = f"sac/{run_name}/gifs/"
+    model_dir = f"sac/{run_name}/models/"
     os.makedirs(gif_dir, exist_ok=True)
     os.makedirs(model_dir, exist_ok=True)
     writer.add_text(
