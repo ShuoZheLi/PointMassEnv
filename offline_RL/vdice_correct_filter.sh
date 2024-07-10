@@ -3,22 +3,22 @@
 # List of session names
 env_1="antmaze-umaze-v2"
 env_2="antmaze-umaze-v2"
-env_name="EmptyRoom"
-project="empty_room"
+project="discrete_empty_room_offline"
 conda_env="corl_0"
-checkpoints_path_base="empty_room"
+checkpoints_path_base="discrete_empty_room_offline"
 
+env_name="EmptyRoom"
+discrete_action="True"
 normalize_state=(False)
 normalize_reward_values=(True)
-# discount_values=(0.92 0.99)
 discount_values=(0.99)
-# true_dice_alpha_values=(0.5 1 10 100)
-true_dice_alpha_values=(1 1.5 2 4)
-semi_dice_lambda_values=(0.3)
-percent_expert="0.5"
+# true_dice_alpha_values=(1 1.5 2)
+true_dice_alpha_values=(1)
+semi_dice_lambda_values=(0.525)
+percent_expert="0"
 
 seed=(100)
-GPUS=(0 1 2 3)
+GPUS=(1 2 3 0)
 
 # Initialize an experiment counter
 experiment_counter=0
@@ -53,8 +53,9 @@ for normalize_reward in "${normalize_reward_values[@]}"; do
 
           # Start the experiment with the specified parameters
           tmux send-keys -t $session_name "CUDA_VISIBLE_DEVICES=$device \
-                                          python3 vdice_correct_filter.py \
+                                          python3 offline_RL/vdice_correct_filter.py \
                                           --env_name $env_name \
+                                          --discrete_action $discrete_action \
                                           --percent_expert $percent_expert \
                                           --env_1 $env_1 \
                                           --env_2 $env_2 \

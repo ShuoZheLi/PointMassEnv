@@ -92,6 +92,7 @@ class TrainConfig:
     env_name: str = "FourRooms"
     reward_type: str = "sparse"
     percent_expert: float = 0
+    discrete_action: bool = False
     
 
     def __post_init__(self):
@@ -711,35 +712,38 @@ def eval_policy(actor, global_step, gif_dir, device, wandb, name):
     
     actor.eval()
     images = []
-    count_success = 0
+    traj = []
+    episode_lengths = []
+    count_success = []
     for i in range(1):
         episode_return = 0.0
         episode_length = 0
+        traj.append([])
         done = False
         obs, _ = env.reset()
+        traj[-1].append(obs)
         images.append(np.moveaxis(np.transpose(env.render()), 0, -1))
         while not done:
             with torch.no_grad():
                 mean = actor.act(torch.Tensor([obs]).to(device), device=device)
             obs, reward, done, trunc, info = env.step(mean)
             images.append(np.moveaxis(np.transpose(env.render()), 0, -1))
+            traj[-1].append(obs)
             episode_return += reward
             episode_length += 1
             if done and info["success"]:
-                count_success += 1
-    
+                count_success.append(1)
+            elif done and not info["success"]:
+                count_success.append(0)
+        episode_lengths.append(episode_length)
+
     actor.train()
     # save images into gif
     imageio.mimsave(gif_dir + "/" +str(global_step) + ".gif", images, fps=10)
-    success_rate = count_success / 1.0
 
-    # wandb.log(
-    #             {"vdice_train/"+name: success_rate,
-    #             #  "policy_train": global_step,
-    #              },
-    #         )
+    success_rate = np.mean(count_success)
     print(name+f" Success rate: {success_rate}")
-    return success_rate
+    return success_rate, np.mean(episode_lengths), traj 
 
 def get_weights(dataset, trainer):
 
@@ -787,7 +791,7 @@ def get_weights(dataset, trainer):
 
     return semi_s_weight, semi_a_weight, semi_s_or_a_weight, semi_s_and_a_weight, true_sa_weight
 
-def draw_traj(weights, dataset, env, save_path=None):
+def draw_traj(weights, dataset, env, save_path=None, trajectories=None):
     # select the observation in dataset with weights > 0
     selected_obs = dataset["observations"][weights]
     selected_next_obs = dataset["next_observations"][weights]
@@ -795,6 +799,7 @@ def draw_traj(weights, dataset, env, save_path=None):
     selected_traj_img = env.get_env_frame_with_selected_traj(obs=selected_obs, 
                                                             next_obs=selected_next_obs,
                                                             terminals=selected_terminals,
+                                                            trajectories=trajectories,
                                                             save_path=save_path)
     
     return selected_traj_img
@@ -837,21 +842,21 @@ def train(config: TrainConfig):
 
 
     temp_dataset = {}
-    temp_dataset["observations"] = dataset["observations"][:2000]
-    temp_dataset["actions"] = dataset["actions"][:2000]
-    temp_dataset["rewards"] = dataset["rewards"][:2000]
-    temp_dataset["next_observations"] = dataset["next_observations"][:2000]
-    temp_dataset["terminals"] = dataset["terminals"][:2000]
+    temp_dataset["observations"] = dataset["observations"][:20000]
+    temp_dataset["actions"] = dataset["actions"][:20000]
+    temp_dataset["rewards"] = dataset["rewards"][:20000]
+    temp_dataset["next_observations"] = dataset["next_observations"][:20000]
+    temp_dataset["terminals"] = dataset["terminals"][:20000]
 
     temp_expert_dataset = {}
-    temp_expert_dataset["observations"] = expert_dataset["observations"][:2000]
-    temp_expert_dataset["actions"] = expert_dataset["actions"][:2000]
-    temp_expert_dataset["rewards"] = expert_dataset["rewards"][:2000]
-    temp_expert_dataset["next_observations"] = expert_dataset["next_observations"][:2000]
-    temp_expert_dataset["terminals"] = expert_dataset["terminals"][:2000]
+    temp_expert_dataset["observations"] = expert_dataset["observations"][:20000]
+    temp_expert_dataset["actions"] = expert_dataset["actions"][:20000]
+    temp_expert_dataset["rewards"] = expert_dataset["rewards"][:20000]
+    temp_expert_dataset["next_observations"] = expert_dataset["next_observations"][:20000]
+    temp_expert_dataset["terminals"] = expert_dataset["terminals"][:20000]
 
     if config.checkpoints_path is not None:
-        weights = np.ones(2000, dtype=bool)
+        weights = np.ones(20000, dtype=bool)
         save_dir = config.checkpoints_path + "/selected_traj/"
         os.makedirs(save_dir, exist_ok=True)
         full_traj = draw_traj(weights, temp_dataset, env, save_path = save_dir + "/full.png")
@@ -871,11 +876,26 @@ def train(config: TrainConfig):
 
         if (t + 1) % config.eval_freq == 0:
             policy_log_dict = {}
-            policy_log_dict["policy_train/semi_s_and_a_perform"] = eval_policy(semi_trainer.semi_sa_actor_and, t, config.checkpoints_path+"/gif/semi_s_and_a", config.device, wandb, "semi_s_and_a_perform")
-            policy_log_dict["policy_train/semi_s_or_a_perform"] = eval_policy(semi_trainer.semi_sa_actor_or, t, config.checkpoints_path+"/gif/semi_s_or_a", config.device, wandb, "semi_s_or_a_perform")
-            policy_log_dict["policy_train/semi_s_perform"] = eval_policy(semi_trainer.semi_s_actor, t, config.checkpoints_path+"/gif/semi_s", config.device, wandb, "semi_s_perform")
-            policy_log_dict["policy_train/semi_a_perform"] = eval_policy(semi_trainer.semi_a_actor, t, config.checkpoints_path+"/gif/semi_a", config.device, wandb, "semi_a_perform")
-            policy_log_dict["policy_train/true_s_and_a_perform"] = eval_policy(semi_trainer.true_sa_actor, t, config.checkpoints_path+"/gif/true_s_and_a", config.device, wandb, "true_s_and_a_perform")
+            policy_log_dict["policy_train/semi_s_and_a_perform"], \
+            policy_log_dict["policy_train/semi_s_and_a_epi_len"], \
+            semi_s_and_a_traj = eval_policy(semi_trainer.semi_sa_actor_and, t, config.checkpoints_path+"/gif/semi_s_and_a", config.device, wandb, "semi_s_and_a_perform")
+            
+            policy_log_dict["policy_train/semi_s_or_a_perform"], \
+            policy_log_dict["policy_train/semi_s_or_a_epi_len"], \
+            semi_s_or_a_traj = eval_policy(semi_trainer.semi_sa_actor_or, t, config.checkpoints_path+"/gif/semi_s_or_a", config.device, wandb, "semi_s_or_a_perform")
+            
+            policy_log_dict["policy_train/semi_s_perform"], \
+            policy_log_dict["policy_train/semi_s_epi_len"], \
+            semi_s_traj  = eval_policy(semi_trainer.semi_s_actor, t, config.checkpoints_path+"/gif/semi_s", config.device, wandb, "semi_s_perform")
+            
+            policy_log_dict["policy_train/semi_a_perform"], \
+            policy_log_dict["policy_train/semi_a_epi_len"], \
+            semi_a_traj = eval_policy(semi_trainer.semi_a_actor, t, config.checkpoints_path+"/gif/semi_a", config.device, wandb, "semi_a_perform")
+            
+            policy_log_dict["policy_train/true_s_and_a_perform"], \
+            policy_log_dict["policy_train/true_s_and_a_epi_len"], \
+            true_s_and_a_traj = eval_policy(semi_trainer.true_sa_actor, t, config.checkpoints_path+"/gif/true_s_and_a", config.device, wandb, "true_s_and_a_perform")
+            
             policy_log_dict["policy_step"] = t 
             wandb.log(policy_log_dict,)
             print("==============================")
@@ -899,7 +919,7 @@ def train(config: TrainConfig):
                 for key, weights in weights_dict.items():
                     save_dir = config.checkpoints_path + "/selected_traj/" + key
                     os.makedirs(save_dir, exist_ok=True)
-                    selected_img  = draw_traj(weights, temp_dataset, env, save_path = save_dir + "/" + str(t) + ".png")
+                    selected_img  = draw_traj(weights, temp_dataset, env, save_path = save_dir + "/" + str(t) + ".png", trajectories=locals()[key+"_traj"])
                     weights_dict[key] = selected_img
                 
                 wandb.log({"selected_traj/" + "semi_s": wandb.Image(np.moveaxis(np.transpose(weights_dict["semi_s"]), 0, -1)),

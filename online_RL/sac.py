@@ -194,7 +194,7 @@ def eval_policy(actor, global_step, gif_dir):
     return episode_return, episode_length
 
 def discrete_action(action):
-    for i in range(envs.num_envs):
+    for i in range(action.shape[0]):
         x, y = action[i]
         if x < -0.5:
             x = -1

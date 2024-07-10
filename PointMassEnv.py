@@ -2,10 +2,8 @@ import gymnasium as gym
 import numpy as np
 import pygame
 import sys
-import matplotlib.pyplot as plt
 from typing import Union, Optional
 from gymnasium.spaces import Space
-from PIL import Image, ImageDraw
 import pickle
 from WALLS import WALLS
 
@@ -31,6 +29,8 @@ def resize_walls(walls, factor):
 # class PointMassEnv(gym.Env):
 class PointMassEnv(gym.Env[np.ndarray, Union[int, np.ndarray]]):
     """Class for 2D navigation in PointMass environment."""
+
+    from PointMassEnvRender import get_env_frame, get_env_frame_with_traj, get_env_frame_with_selected_traj, draw_arrowhead, draw_trajectory
 
     def __init__(self,
                 env_name='FourRooms',
@@ -118,12 +118,6 @@ class PointMassEnv(gym.Env[np.ndarray, Union[int, np.ndarray]]):
             self.state = self._start
         self.epi_length = 0
         return self._get_obs(), {}
-    
-    # def render(self):
-    #     i, j = self._discretize_state(self.state)
-    #     img = self._walls.copy()
-    #     img[i, j] = 2
-    #     return img
     
     def reward(self, state):
         reward = 0
@@ -254,188 +248,15 @@ class PointMassEnv(gym.Env[np.ndarray, Union[int, np.ndarray]]):
 
         return False
     
-    ##########################
-    ###### better render #####
-    ##########################
-    def get_env_frame_2(self, pos, goal):
-
-        # Create the plot
-        plt.figure(figsize=(8, 8))
-        extent = [0, self._walls.shape[1], 0, self._walls.shape[0]]
-        plt.imshow(self._walls, cmap='Greys', interpolation='none', extent=extent)
-
-        plt.scatter(pos[1], pos[0], color='blue', s=100)
-        plt.scatter(goal[1], goal[0], color='red', s=100)
-        
-
-        plt.grid(color='gray', linestyle='-', linewidth=0.25)
-
-        # change the size of the grid box to be 1x1
-        plt.xticks(np.arange(0, 17, 1))
-        plt.yticks(np.arange(0, 17, 1))
-        plt.grid(True)
-
-        # plt.axis('off')
-        plt.title('Four-room')
-        plt.gca().invert_yaxis()
-        fig = plt.gcf()
-        fig.canvas.draw()
-        # convert canvas to image using numpy
-        img = np.fromstring(fig.canvas.tostring_rgb(), dtype=np.uint8, sep='')
-        img = img.reshape(fig.canvas.get_width_height()[::-1] + (3,))
-        img = np.fliplr(img)
-        img = np.rot90(img)
-
-        plt.figure().clear()
-        plt.figure().clf()
-        plt.close()
-        plt.cla()
-        plt.clf()
-
-        return img
-
-    def get_env_frame(self, pos, goal, save_path='env_frame.png'):
-        
-        pos = pos - 0.5
-        goal = goal - 0.5
-
-        # Create a blank image with white background
-        img = Image.new('RGB', (self._walls.shape[1] * 10, self._walls.shape[0] * 10), (255, 255, 255))
-        draw = ImageDraw.Draw(img)
-
-        # Draw walls
-        for y in range(self._walls.shape[0]):
-            for x in range(self._walls.shape[1]):
-                if self._walls[y, x] == 1:
-                    draw.rectangle([x * 10, y * 10, (x + 1) * 10, (y + 1) * 10], fill='black')
-
-        # Draw position and goal
-        draw.ellipse([(pos[1] * 10, pos[0] * 10), (pos[1] * 10 + 10, pos[0] * 10 + 10)], fill='blue', width=0.25)
-        draw.ellipse([(goal[1] * 10, goal[0] * 10), (goal[1] * 10 + 10, goal[0] * 10 + 10)], fill='red', width=0.25)
-
-        # Draw grid
-        for x in range(0, self._walls.shape[1] * 10, 10):
-            draw.line([(x, 0), (x, self._walls.shape[0] * 10)], fill='gray', width=1)
-        for y in range(0, self._walls.shape[0] * 10, 10):
-            draw.line([(0, y), (self._walls.shape[1] * 10, y)], fill='gray', width=1)
-
-        # Save the image
-        # img.save(save_path)
-
-        img = img.resize((800, 800), Image.LANCZOS)
-
-        # Convert PIL image to numpy array
-        img_array = np.array(img)
-        img_array = np.moveaxis(np.transpose(img_array), 0, -1)
-        return img_array
-
-    def get_env_frame_with_selected_traj(self, start=None, goal=None, obs=None, next_obs=None, terminals=None, save_path=None):
-        
-        if start is None:
-            start = self._start
-        
-        if goal is None:
-            goal = self._goal
-        start = start - 0.5
-        goal = goal - 0.5
-
-        # Create a blank image with a white background
-        img = Image.new('RGB', (self._walls.shape[1] * 10, self._walls.shape[0] * 10), (255, 255, 255))
-        draw = ImageDraw.Draw(img)
-
-        # Draw walls
-        for y in range(self._walls.shape[0]):
-            for x in range(self._walls.shape[1]):
-                if self._walls[y, x] == 1:
-                    draw.rectangle([x * 10, y * 10, (x + 1) * 10, (y + 1) * 10], fill='black')
-
-        # Draw startition and goal
-        draw.ellipse([(start[1] * 10, start[0] * 10), (start[1] * 10 + 10, start[0] * 10 + 10)], fill='blue', width=0.25)
-        draw.ellipse([(goal[1] * 10, goal[0] * 10), (goal[1] * 10 + 10, goal[0] * 10 + 10)], fill='red', width=0.25)
-
-        # Draw trajectories
-        for i in range(len(obs)):
-            if terminals[i]:
-                continue
-            start = obs[i] - 0.5
-            end = next_obs[i] - 0.5
-            draw.line([(start[1] * 10 + 5, start[0] * 10 + 5), (end[1] * 10 + 5, end[0] * 10 + 5)], fill='red', width=1)
-        
-        # Draw grid
-        for x in range(0, self._walls.shape[1] * 10, 10):
-            draw.line([(x, 0), (x, self._walls.shape[0] * 10)], fill='gray', width=1)
-        for y in range(0, self._walls.shape[0] * 10, 10):
-            draw.line([(0, y), (self._walls.shape[1] * 10, y)], fill='gray', width=1)
-        
-        # Save the image
-        if save_path is not None:
-            img.save(save_path)
-
-        img = img.resize((800, 800), Image.LANCZOS)
-
-        # Convert PIL image to numpy array
-        img_array = np.array(img)
-        img_array = np.moveaxis(np.transpose(img_array), 0, -1)
-        return img_array
-
-
-    def get_env_frame_with_traj(self, start, goal, trajectories, save_path=None):
-        trajectories = np.array(trajectories)
-        start = start - 0.5
-        goal = goal - 0.5
-
-        # Create a blank image with a white background
-        img = Image.new('RGB', (self._walls.shape[1] * 10, self._walls.shape[0] * 10), (255, 255, 255))
-        draw = ImageDraw.Draw(img)
-
-        # Draw walls
-        for y in range(self._walls.shape[0]):
-            for x in range(self._walls.shape[1]):
-                if self._walls[y, x] == 1:
-                    draw.rectangle([x * 10, y * 10, (x + 1) * 10, (y + 1) * 10], fill='black')
-
-        # Draw startition and goal
-        draw.ellipse([(start[1] * 10, start[0] * 10), (start[1] * 10 + 10, start[0] * 10 + 10)], fill='blue', width=0.25)
-        draw.ellipse([(goal[1] * 10, goal[0] * 10), (goal[1] * 10 + 10, goal[0] * 10 + 10)], fill='red', width=0.25)
-
-        # Draw trajectories with fading colors
-        for trajectory in trajectories:
-            num_segments = len(trajectory) - 1
-            for i in range(num_segments):
-                start = trajectory[i] - 0.5
-                end = trajectory[i + 1] - 0.5
-
-                # Calculate the fading color (fade towards more transparent)
-                opacity = int(255 * (1 - i / num_segments))
-                color = (255, 0, 0, opacity)
-
-                # Draw line segment
-                draw.line([(start[1] * 10 + 5, start[0] * 10 + 5), (end[1] * 10 + 5, end[0] * 10 + 5)], fill=color, width=1)
-
-        # Draw grid
-        for x in range(0, self._walls.shape[1] * 10, 10):
-            draw.line([(x, 0), (x, self._walls.shape[0] * 10)], fill='gray', width=1)
-        for y in range(0, self._walls.shape[0] * 10, 10):
-            draw.line([(0, y), (self._walls.shape[1] * 10, y)], fill='gray', width=1)
-
-        # Save the image
-        if save_path is not None:
-            img.save(save_path)
-
-        img = img.resize((800, 800), Image.LANCZOS)
-
-        # Convert PIL image to numpy array
-        img_array = np.array(img)
-        img_array = np.moveaxis(np.transpose(img_array), 0, -1)
-        return img_array
+    
 
 if __name__ == '__main__':
     pygame.init()
 
     # Set up the display
     width, height = 800, 800
-    screen = pygame.display.set_mode((width, height))
-    pygame.display.set_caption('PointMassEnv Game')
+    # screen = pygame.display.set_mode((width, height))
+    # pygame.display.set_caption('PointMassEnv Game')
     
     start_pos = [[12.5, 4.5]]
     goal = [[4.5, 12.5]]
@@ -443,6 +264,16 @@ if __name__ == '__main__':
     env = PointMassEnv(start=np.array(start_pos[0], dtype=np.float32), env_name="EmptyRoom",)
     env._goal = np.array(goal[-1], dtype=np.float32)
     obs, _ = env.reset()
+
+    dataset = np.load('temp_dataset.npy', allow_pickle=True)
+    # img = env.get_env_frame_with_traj(obs, env._goal, trajectories, save_path='env_frame.png')
+    img = env.get_env_frame_with_selected_traj(start=obs, 
+                                               goal=env._goal, 
+                                               obs=dataset["observations"], 
+                                               next_obs=dataset["next_observations"], 
+                                               terminals=dataset["terminals"],
+                                               save_path='env_frame.png')
+    exit()
     
     step_num = 0
     # Game loop
@@ -458,12 +289,9 @@ if __name__ == '__main__':
         # img = env.get_env_frame_with_traj(obs, env._goal, trajectories)
 
         # trajectories = np.load('dataset.npy', allow_pickle=True)
-
-        # with open('dataset.npy', 'rb') as f:
-        #     trajectories = pickle.load(f)
-
         # trajectories = trajectories['trajectories']
-        # img = env.get_env_frame_with_traj(obs, env._goal, trajectories)
+        # img = env.get_env_frame_with_traj(obs, env._goal, trajectories, save_path='env_frame.png')
+        # exit()
 
         img_surface = pygame.surfarray.make_surface(img)
         screen.blit(img_surface, (0, 0))

@@ -1,14 +1,14 @@
 #!/bin/bash
 conda_env="corl_0"
 
-project="discrete_empty_room"
-checkpoints_path_base="discrete_empty_room"
-env_names=("EmptyRoom")
+project="discrete_FourRooms"
+checkpoints_path_base="discrete_FourRooms"
+env_names=("FourRooms")
 reward_type="dense"
 discrete_action="True"
 
 seeds=(100)
-GPUS=(0 1 2 3)
+GPUS=(1)
 
 # Initialize an experiment counter
 experiment_counter=0
@@ -44,6 +44,7 @@ for env_name in "${env_names[@]}"; do
                                         --env_name $env_name \
                                         --reward_type $reward_type \
                                         --discrete_action $discrete_action \
+                                        --save_model True \
                                         --checkpoints_path $checkpoints_path \
                                         --wandb_project_name $project \
                                         --seed $seed" C-m
