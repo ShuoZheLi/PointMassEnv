@@ -529,7 +529,7 @@ class VDICE:
         return log_dict
 
     def state_dict(self) -> Dict[str, Any]:
-        return {
+        nn_state_dict = {
             "semi_v": self.semi_v.state_dict(),
             "semi_v_optimizer": self.semi_v_optimizer.state_dict(),
             "true_v": self.true_v.state_dict(),
@@ -555,6 +555,9 @@ class VDICE:
 
             "total_it": self.total_it,
         }
+
+        nn_state_dict["train_config"] = asdict(config)
+        return nn_state_dict
 
     def load_state_dict(self, state_dict: Dict[str, Any]):
         self.semi_v.load_state_dict(state_dict["semi_v"])
@@ -842,21 +845,21 @@ def train(config: TrainConfig):
 
 
     temp_dataset = {}
-    temp_dataset["observations"] = dataset["observations"][:20000]
-    temp_dataset["actions"] = dataset["actions"][:20000]
-    temp_dataset["rewards"] = dataset["rewards"][:20000]
-    temp_dataset["next_observations"] = dataset["next_observations"][:20000]
-    temp_dataset["terminals"] = dataset["terminals"][:20000]
+    temp_dataset["observations"] = dataset["observations"][:2000]
+    temp_dataset["actions"] = dataset["actions"][:2000]
+    temp_dataset["rewards"] = dataset["rewards"][:2000]
+    temp_dataset["next_observations"] = dataset["next_observations"][:2000]
+    temp_dataset["terminals"] = dataset["terminals"][:2000]
 
     temp_expert_dataset = {}
-    temp_expert_dataset["observations"] = expert_dataset["observations"][:20000]
-    temp_expert_dataset["actions"] = expert_dataset["actions"][:20000]
-    temp_expert_dataset["rewards"] = expert_dataset["rewards"][:20000]
-    temp_expert_dataset["next_observations"] = expert_dataset["next_observations"][:20000]
-    temp_expert_dataset["terminals"] = expert_dataset["terminals"][:20000]
+    temp_expert_dataset["observations"] = expert_dataset["observations"][:2000]
+    temp_expert_dataset["actions"] = expert_dataset["actions"][:2000]
+    temp_expert_dataset["rewards"] = expert_dataset["rewards"][:2000]
+    temp_expert_dataset["next_observations"] = expert_dataset["next_observations"][:2000]
+    temp_expert_dataset["terminals"] = expert_dataset["terminals"][:2000]
 
     if config.checkpoints_path is not None:
-        weights = np.ones(20000, dtype=bool)
+        weights = np.ones(2000, dtype=bool)
         save_dir = config.checkpoints_path + "/selected_traj/"
         os.makedirs(save_dir, exist_ok=True)
         full_traj = draw_traj(weights, temp_dataset, env, save_path = save_dir + "/full.png")
