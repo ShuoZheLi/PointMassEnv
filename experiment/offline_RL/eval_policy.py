@@ -1,3 +1,5 @@
+import os, sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import offline_RL.vdice_correct_filter
 from offline_RL.vdice_correct_filter import VDICE, PointMassEnv, trainer_init, get_weights, draw_traj, modify_reward
 import imageio

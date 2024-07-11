@@ -1,5 +1,5 @@
 # docs and experiment results can be found at https://docs.cleanrl.dev/rl-algorithms/sac/#sac_continuous_actionpy
-import os
+import os, sys
 import random
 import time
 from dataclasses import dataclass
@@ -13,6 +13,7 @@ import torch.optim as optim
 import pyrallis
 from stable_baselines3.common.buffers import ReplayBuffer
 from torch.utils.tensorboard import SummaryWriter
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from PointMassEnv import PointMassEnv
 import imageio
 

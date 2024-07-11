@@ -3,9 +3,9 @@
 # List of session names
 env_1="antmaze-umaze-v2"
 env_2="antmaze-umaze-v2"
-project="discrete_empty_room_offline"
+project="discrete_empty_room_offline_mini_obs"
 conda_env="corl_0"
-checkpoints_path_base="discrete_empty_room_offline"
+checkpoints_path_base="discrete_empty_room_offline_mini_obs"
 
 env_name="EmptyRoom"
 discrete_action="True"
@@ -14,11 +14,19 @@ normalize_reward_values=(True)
 discount_values=(0.99)
 # true_dice_alpha_values=(1 1.5 2)
 true_dice_alpha_values=(1)
-semi_dice_lambda_values=(0.525)
+# semi_dice_lambda_values=(0.3 0.4 0.5 0.6)
+semi_dice_lambda_values=(0.5)
 percent_expert="0"
 
+eval_freq="5000"
+save_freq="5000"
+
+batch_size="256"
+hidden_dim="256"
+
+
 seed=(100)
-GPUS=(1 2 3 0)
+GPUS=(0 1 2 3)
 
 # Initialize an experiment counter
 experiment_counter=0
@@ -37,6 +45,14 @@ for normalize_reward in "${normalize_reward_values[@]}"; do
           session_name="${project}_normalize_reward_${normalize_reward}_true_dice_alpha_${true_dice_alpha}_discount_${discount}_semi_dice_lambda_${semi_dice_lambda}_seed_${current_seed}"
           # append percent_expert
           session_name="${session_name}_percent_expert_${percent_expert}"
+          # append eval_freq
+          session_name="${session_name}_eval_freq_${eval_freq}"
+          # append save_freq
+          session_name="${session_name}_save_freq_${save_freq}"
+          # append batch_size
+          session_name="${session_name}_batch_size_${batch_size}"
+          # append hidden_dim
+          session_name="${session_name}_hidden_dim_${hidden_dim}"
 
           session_name="${session_name//./_}" # Replace dots with underscores
 
@@ -48,8 +64,8 @@ for normalize_reward in "${normalize_reward_values[@]}"; do
           tmux new-session -d -s $session_name
 
           # Activate the conda environment
-          tmux send-keys -t $session_name "source /data/shuozhe/miniconda3/bin/activate $conda_env" C-m
-          # tmux send-keys -t $session_name "conda activate $conda_env" C-m
+          # tmux send-keys -t $session_name "source /data/shuozhe/miniconda3/bin/activate $conda_env" C-m
+          tmux send-keys -t $session_name "conda activate $conda_env" C-m
 
           # Start the experiment with the specified parameters
           tmux send-keys -t $session_name "CUDA_VISIBLE_DEVICES=$device \
@@ -57,6 +73,10 @@ for normalize_reward in "${normalize_reward_values[@]}"; do
                                           --env_name $env_name \
                                           --discrete_action $discrete_action \
                                           --percent_expert $percent_expert \
+                                          --eval_freq $eval_freq \
+                                          --save_freq $save_freq \
+                                          --batch_size $batch_size \
+                                          --hidden_dim $hidden_dim \
                                           --env_1 $env_1 \
                                           --env_2 $env_2 \
                                           --normalize_reward $normalize_reward \

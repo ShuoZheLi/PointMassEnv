@@ -1,7 +1,7 @@
 # source: https://github.com/gwthomas/IQL-PyTorch
 # https://arxiv.org/pdf/2110.06169.pdf
 import copy
-import os
+import os, sys
 import random
 import uuid
 from dataclasses import asdict, dataclass
@@ -20,6 +20,7 @@ from torch.distributions import Normal
 from torch.optim.lr_scheduler import CosineAnnealingLR
 # import suboptimal_offline_datasets
 from torch import autograd
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from offline_RL.utils import TwinQ, ValueFunction, GaussianPolicy, DeterministicPolicy, \
                     ReplayBuffer, MLP, TwinV, soft_update, set_seed, compute_mean_std, \
                     eval_actor, return_reward_range, modify_reward, normalize_states, \

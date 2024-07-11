@@ -1,7 +1,7 @@
 # source: https://github.com/gwthomas/IQL-PyTorch
 # https://arxiv.org/pdf/2110.06169.pdf
 import copy
-import os
+import os, sys
 import random
 import uuid
 from dataclasses import asdict, dataclass
@@ -18,6 +18,7 @@ import torch.nn.functional as F
 import wandb
 from torch.distributions import Normal
 from torch.optim.lr_scheduler import CosineAnnealingLR
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from PointMassEnv import PointMassEnv
 import imageio
 

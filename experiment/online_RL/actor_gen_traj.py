@@ -1,12 +1,13 @@
+import os, sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from online_RL.sac import Actor, discrete_action
 import torch
 import numpy as np
 from PointMassEnv import PointMassEnv
 import gymnasium as gym
-import os
 import random
 from typing import Optional
-import pickle 
+import pickle
 
 
 
