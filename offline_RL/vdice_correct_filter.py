@@ -692,7 +692,8 @@ def create_dataset(config: TrainConfig):
     dataset = np.load("dataset.npy", allow_pickle=True)
     expert_dataset = np.load("expert_dataset.npy", allow_pickle=True)
 
-    expert_idx = np.random.choice(np.arange(int(1e6)), int(config.percent_expert * 1e6), replace=False)
+    expert_idx = np.random.choice(np.arange(int(dataset["observations"].shape[0])), int(config.percent_expert * dataset["observations"].shape[0]), 
+                                  replace=False)
     dataset["observations"][expert_idx] = expert_dataset["observations"][expert_idx]
     dataset["actions"][expert_idx] = expert_dataset["actions"][expert_idx]
     dataset["rewards"][expert_idx] = expert_dataset["rewards"][expert_idx]
@@ -800,7 +801,13 @@ def draw_traj(weights, dataset, env, save_path=None, trajectories=None):
     selected_obs = dataset["observations"][weights]
     selected_next_obs = dataset["next_observations"][weights]
     selected_terminals = dataset["terminals"][weights]
-    selected_traj_img = env.get_env_frame_with_selected_traj(obs=selected_obs, 
+    # selected_traj_img = env.get_env_frame_with_selected_traj(obs=selected_obs, 
+    #                                                         next_obs=selected_next_obs,
+    #                                                         terminals=selected_terminals,
+    #                                                         trajectories=trajectories,
+    #                                                         save_path=save_path)
+
+    selected_traj_img = env.get_env_frame_with_selected_traj_plt(obs=selected_obs, 
                                                             next_obs=selected_next_obs,
                                                             terminals=selected_terminals,
                                                             trajectories=trajectories,
@@ -844,27 +851,30 @@ def train(config: TrainConfig):
     wandb_init(asdict(config))
     t = 0
 
+    
 
-    temp_dataset = {}
-    temp_dataset["observations"] = dataset["observations"][:2000]
-    temp_dataset["actions"] = dataset["actions"][:2000]
-    temp_dataset["rewards"] = dataset["rewards"][:2000]
-    temp_dataset["next_observations"] = dataset["next_observations"][:2000]
-    temp_dataset["terminals"] = dataset["terminals"][:2000]
-
+    sample_size = min(2000, len(expert_dataset["observations"]))
     temp_expert_dataset = {}
-    temp_expert_dataset["observations"] = expert_dataset["observations"][:2000]
-    temp_expert_dataset["actions"] = expert_dataset["actions"][:2000]
-    temp_expert_dataset["rewards"] = expert_dataset["rewards"][:2000]
-    temp_expert_dataset["next_observations"] = expert_dataset["next_observations"][:2000]
-    temp_expert_dataset["terminals"] = expert_dataset["terminals"][:2000]
+    temp_expert_dataset["observations"] = expert_dataset["observations"][:sample_size]
+    temp_expert_dataset["actions"] = expert_dataset["actions"][:sample_size]
+    temp_expert_dataset["rewards"] = expert_dataset["rewards"][:sample_size]
+    temp_expert_dataset["next_observations"] = expert_dataset["next_observations"][:sample_size]
+    temp_expert_dataset["terminals"] = expert_dataset["terminals"][:sample_size]
+
+    sample_size = min(2000, len(dataset["observations"]))
+    temp_dataset = {}
+    temp_dataset["observations"] = dataset["observations"][:sample_size]
+    temp_dataset["actions"] = dataset["actions"][:sample_size]
+    temp_dataset["rewards"] = dataset["rewards"][:sample_size]
+    temp_dataset["next_observations"] = dataset["next_observations"][:sample_size]
+    temp_dataset["terminals"] = dataset["terminals"][:sample_size]
 
     if config.checkpoints_path is not None:
-        weights = np.ones(2000, dtype=bool)
+        weights = np.ones(sample_size, dtype=bool)
         save_dir = config.checkpoints_path + "/selected_traj/"
         os.makedirs(save_dir, exist_ok=True)
         full_traj = draw_traj(weights, temp_dataset, env, save_path = save_dir + "/full.png")
-        wandb.log({"selected_traj/" + "full_traj": wandb.Image(np.moveaxis(np.transpose(full_traj), 0, -1)),
+        wandb.log({"selected_traj/" + "full_traj": wandb.Image(full_traj),
                    "selected_traj_step" : 0,
                    })
         
@@ -926,11 +936,11 @@ def train(config: TrainConfig):
                     selected_img  = draw_traj(weights, temp_dataset, env, save_path = save_dir + "/" + str(t) + ".png", trajectories=locals()[key+"_traj"])
                     weights_dict[key] = selected_img
                 
-                wandb.log({"selected_traj/" + "semi_s": wandb.Image(np.moveaxis(np.transpose(weights_dict["semi_s"]), 0, -1)),
-                           "selected_traj/" + "semi_a": wandb.Image(np.moveaxis(np.transpose(weights_dict["semi_a"]), 0, -1)),
-                           "selected_traj/" + "semi_s_or_a": wandb.Image(np.moveaxis(np.transpose(weights_dict["semi_s_or_a"]), 0, -1)),
-                           "selected_traj/" + "semi_s_and_a": wandb.Image(np.moveaxis(np.transpose(weights_dict["semi_s_and_a"]), 0, -1)),
-                           "selected_traj/" + "true_s_and_a": wandb.Image(np.moveaxis(np.transpose(weights_dict["true_s_and_a"]), 0, -1)),
+                wandb.log({"selected_traj/" + "semi_s": wandb.Image(weights_dict["semi_s"]),
+                           "selected_traj/" + "semi_a": wandb.Image(weights_dict["semi_a"]),
+                           "selected_traj/" + "semi_s_or_a": wandb.Image(weights_dict["semi_s_or_a"]),
+                           "selected_traj/" + "semi_s_and_a": wandb.Image(weights_dict["semi_s_and_a"]),
+                           "selected_traj/" + "true_s_and_a": wandb.Image(weights_dict["true_s_and_a"]),
                            "selected_traj_step" : t,
                            },)
             

@@ -30,7 +30,7 @@ def resize_walls(walls, factor):
 class PointMassEnv(gym.Env[np.ndarray, Union[int, np.ndarray]]):
     """Class for 2D navigation in PointMass environment."""
 
-    from PointMassEnvRender import get_env_frame, get_env_frame_with_traj, get_env_frame_with_selected_traj, draw_arrowhead, draw_trajectory
+    from PointMassEnvRender import get_env_frame, get_env_frame_with_traj, get_env_frame_with_selected_traj, draw_arrowhead, draw_trajectory, get_env_frame_with_selected_traj_plt
 
     def __init__(self,
                 env_name='FourRooms',
@@ -152,7 +152,7 @@ class PointMassEnv(gym.Env[np.ndarray, Union[int, np.ndarray]]):
 
         # TODO: we can give penalty for hitting the wall (valid = False)
         reward = self.reward(self.state)
-        term = trunc = self.check_success(self.state) or self.epi_length >= self._episode_length
+        term = trunc = self.check_success(self.state) or self.epi_length >= self._episode_length or not valid
 
         return self._get_obs(), reward, term, trunc, {'success': self.check_success(self.state), 'valid': valid}
 
@@ -265,9 +265,9 @@ if __name__ == '__main__':
     env._goal = np.array(goal[-1], dtype=np.float32)
     obs, _ = env.reset()
 
-    dataset = np.load('temp_dataset.npy', allow_pickle=True)
+    dataset = np.load('dataset.npy', allow_pickle=True)
     # img = env.get_env_frame_with_traj(obs, env._goal, trajectories, save_path='env_frame.png')
-    img = env.get_env_frame_with_selected_traj(start=obs, 
+    img = env.get_env_frame_with_selected_traj_plt(start=obs, 
                                                goal=env._goal, 
                                                obs=dataset["observations"], 
                                                next_obs=dataset["next_observations"], 

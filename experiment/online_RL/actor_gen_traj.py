@@ -1,5 +1,5 @@
 import os, sys
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 from online_RL.sac import Actor, discrete_action
 import torch
 import numpy as np
@@ -63,7 +63,7 @@ def gen_traj(actor, env, device, traj_dir, traj_num, transition_num, discrete=Fa
             mean = mean.cpu().numpy()
             if discrete:
                 mean = discrete_action(mean)
-                if np.random.rand() < 1 - epi_len * 0.03:
+                if np.random.rand() < 1 - epi_len * 0.01:
                     mean[0][0] = np.random.choice([-1, 0, 1])
                     mean[0][1] = np.random.choice([-1, 0, 1])
             else:
@@ -111,7 +111,7 @@ if __name__ == "__main__":
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     actor = Actor(envs).to(device)
-    actor.load("sac/discrete_empty_room/discrete_empty_room_env_name_EmptyRoom_seed_100/models/990000_actor.pth")
-    gen_traj(actor, envs, device, "temp_dataset.npy", 90000000, transition_num=2_000, discrete=True)
+    actor.load("EmptyRoom_SAC.pth")
+    gen_traj(actor, envs, device, "dataset.npy", 90000000, transition_num=1400, discrete=True)
 
 

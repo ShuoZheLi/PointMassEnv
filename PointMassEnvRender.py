@@ -51,7 +51,7 @@ def get_env_frame_with_selected_traj_plt(self, start=None, goal=None, obs=None, 
     start = start - 0.5
     goal = goal - 0.5
 
-    fig, ax = plt.subplots()
+    fig, ax = plt.subplots(figsize=(8, 8))
 
     # Draw walls
     for y in range(self._walls.shape[0]):
@@ -64,18 +64,29 @@ def get_env_frame_with_selected_traj_plt(self, start=None, goal=None, obs=None, 
     ax.add_patch(patches.Circle((start[1] + 0.5, start[0] + 0.5), 0.5, color='blue'))
     ax.add_patch(patches.Circle((goal[1] + 0.5, goal[0] + 0.5), 0.5, color='red'))
 
-    # Draw trajectories
+    # Draw trajectories with arrows
     for i in range(len(obs)):
         if terminals[i]:
             continue
         start = obs[i] - 0.5
         end = next_obs[i] - 0.5
         ax.plot([start[1] + 0.5, end[1] + 0.5], [start[0] + 0.5, end[0] + 0.5], color='red', linewidth=1)
+        ax.annotate('', xy=(end[1] + 0.5, end[0] + 0.5), xytext=(start[1] + 0.5, start[0] + 0.5),
+                    # arrowprops=dict(facecolor='red', shrink=0.1, width=1, headwidth=4, headlength=4)
+                    arrowprops=dict(arrowstyle='->', color='red', shrinkA=0, shrinkB=0, linewidth=2)
+                    
+                    )
 
     if trajectories is not None:
         for trajectory in trajectories:
             traj_points = np.array(trajectory) - 0.5
             ax.plot(traj_points[:, 1] + 0.5, traj_points[:, 0] + 0.5, color='blue', linewidth=1)
+            for j in range(len(traj_points) - 1):
+                ax.annotate('', xy=(traj_points[j+1, 1] + 0.5, traj_points[j+1, 0] + 0.5),
+                            xytext=(traj_points[j, 1] + 0.5, traj_points[j, 0] + 0.5),
+                            arrowprops=dict(arrowstyle='->', color='blue', shrinkA=0, shrinkB=0, linewidth=1)
+                            
+                            )
 
     # Draw grid
     ax.set_xticks(np.arange(0, self._walls.shape[1], 1))
@@ -87,16 +98,25 @@ def get_env_frame_with_selected_traj_plt(self, start=None, goal=None, obs=None, 
     ax.set_xlim(0, self._walls.shape[1])
     ax.set_ylim(0, self._walls.shape[0])
     ax.set_aspect('equal')
+    plt.tight_layout(pad=0)
 
-    # TODO: test this
-    canvas = fig.canvas
-    img_array = np.frombuffer(canvas.tostring_rgb(), dtype='uint8')
-    img_array = np.moveaxis(np.transpose(img_array), 0, -1)
+    # Draw the canvas to ensure it has a renderer
+    fig.canvas.draw()
 
-    # Save the image
+    # Convert canvas to image array
+    img_array = np.frombuffer(fig.canvas.tostring_rgb(), dtype='uint8')
+    img_array = img_array.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+
+    # Flip the image upside down
+    img_array = np.flipud(img_array)
+
+    # img_array = np.moveaxis(np.transpose(img_array), 0, -1)
+
+    # Save the image if save_path is specified
     if save_path is not None:
-        img_array.save(save_path)
-    
+        img = Image.fromarray(img_array)
+        img.save(save_path)
+
     return img_array
 
 def get_env_frame_with_selected_traj(self, start=None, goal=None, obs=None, next_obs=None, trajectories=None, terminals=None, save_path=None):
@@ -130,6 +150,7 @@ def get_env_frame_with_selected_traj(self, start=None, goal=None, obs=None, next
         start = obs[i] - 0.5
         end = next_obs[i] - 0.5
         draw.line([(start[1] * 10 + 5, start[0] * 10 + 5), (end[1] * 10 + 5, end[0] * 10 + 5)], fill='red', width=1)
+        self.draw_arrowhead(draw, start, end, color='grey')
     
     if trajectories is not None:
         self.draw_trajectory(draw, trajectories, color='blue')
