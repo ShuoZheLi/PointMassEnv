@@ -117,12 +117,14 @@ def wandb_init(config: dict) -> None:
 
 
     wandb.define_metric("vdice_step")
+    wandb.define_metric("value_step")
     wandb.define_metric("selected_traj_step")
     wandb.define_metric("selected_expert_traj_step")
     wandb.define_metric("policy_step")
 
 
-    wandb.define_metric("vdice_train/*", step_metric="vdice_step")
+    wandb.define_metric("vdice_loss/*", step_metric="vdice_step")
+    wandb.define_metric("value_train/*", step_metric="value_step")
     wandb.define_metric("selected_traj/*", step_metric="selected_traj_step")
     wandb.define_metric("selected_expert_traj/*", step_metric="selected_expert_traj_step")
     wandb.define_metric("policy_train/*", step_metric="policy_step")
@@ -216,6 +218,10 @@ class VDICE:
         self.true_sa_actor_optimizer = torch.optim.Adam(self.true_sa_actor.parameters(), lr=3e-4)
         self.true_sa_actor_lr_schedule = CosineAnnealingLR(self.true_sa_actor_optimizer, max_steps)
 
+        self.bc_actor = copy.deepcopy(self.semi_sa_actor_and).to(device)
+        self.bc_actor_optimizer = torch.optim.Adam(self.bc_actor.parameters(), lr=3e-4)
+        self.bc_actor_lr_schedule = CosineAnnealingLR(self.bc_actor_optimizer, max_steps)
+
         self.vdice_type = vdice_type
         self.semi_dice_lambda = semi_dice_lambda
         self.true_dice_alpha = true_dice_alpha
@@ -304,8 +310,8 @@ class VDICE:
         true_v_loss.backward()
         self.true_v_optimizer.step()
 
-        log_dict["vdice_train/semi_v_value"] = semi_v.mean().item()
-        log_dict["vdice_train/true_v_value"] = true_v.mean().item()
+        log_dict["value_train/semi_v_value"] = semi_v.mean().item()
+        log_dict["value_train/true_v_value"] = true_v.mean().item()
 
         # Update target Q network
         # soft_update(self.v_target, self.v, self.tau)
@@ -329,8 +335,8 @@ class VDICE:
         # s_weight = f_prime_inverse(self.f_name, u)
         # q_loss = sum(torch.mean(s_weight * (q-targets)**2) for q in qs) / len(qs)
         q_loss = sum(torch.mean((q-targets)**2) for q in qs) / len(qs)
-        log_dict["vdice_train/q_loss"] = q_loss.item()
-        log_dict["vdice_train/q_value"] = qs[0].mean().item()
+        log_dict["vdice_loss/q_loss"] = q_loss.item()
+        log_dict["value_train/q_value"] = qs[0].mean().item()
         self.q_optimizer.zero_grad()
         q_loss.backward()
         self.q_optimizer.step()
@@ -366,9 +372,8 @@ class VDICE:
         u_loss.backward()
         self.U_optimizer.step()
 
-        log_dict["vdice_train/a_weight"] = a_weight.mean().item()
-        log_dict["vdice_train/U_loss"] = u_loss.item()
-        log_dict["vdice_train/U_value"] = u.mean().item()
+        log_dict["vdice_loss/U_loss"] = u_loss.item()
+        log_dict["value_train/U_value"] = u.mean().item()
 
         return s_a_weight
 
@@ -395,8 +400,8 @@ class VDICE:
         mu_loss.backward()
         self.mu_optimizer.step()
 
-        log_dict["vdice_train/mu_loss"] = mu_loss.item()
-        log_dict["vdice_train/mu_value"] = mu.mean().item()
+        log_dict["vdice_loss/mu_loss"] = mu_loss.item()
+        log_dict["value_train/mu_value"] = mu.mean().item()
 
     def _update_policy(
         self,
@@ -422,7 +427,8 @@ class VDICE:
             true_sa_weight = f_prime_inverse(self.f_name, true_residual)
 
 
-
+        log_dict["vdice_loss/a_weight"] = semi_a_weight.mean().item()
+        log_dict["vdice_loss/s_weight"] = semi_s_weight.mean().item()
 
 
         policy_out = self.semi_sa_actor_and(observations)
@@ -432,7 +438,7 @@ class VDICE:
         policy_loss.backward()
         self.semi_sa_actor_and_optimizer.step()
         self.semi_sa_actor_and_lr_schedule.step()
-        log_dict["vdice_train/semi_sa_policy_loss"] = policy_loss.item()
+        log_dict["vdice_loss/semi_sa_policy_loss"] = policy_loss.item()
 
         policy_out = self.semi_sa_actor_or(observations)
         bc_losses = -policy_out.log_prob(actions).sum(-1, keepdim=False)
@@ -442,7 +448,7 @@ class VDICE:
         policy_loss.backward()
         self.semi_sa_actor_or_optimizer.step()
         self.semi_sa_actor_or_lr_schedule.step()
-        log_dict["vdice_train/semi_sa_or_policy_loss"] = policy_loss.item()
+        log_dict["vdice_loss/semi_sa_or_policy_loss"] = policy_loss.item()
 
         policy_out = self.semi_s_actor(observations)
         bc_losses = -policy_out.log_prob(actions).sum(-1, keepdim=False)
@@ -451,7 +457,7 @@ class VDICE:
         policy_loss.backward()
         self.semi_s_actor_optimizer.step()
         self.semi_s_actor_lr_schedule.step()
-        log_dict["vdice_train/semi_s_policy_loss"] = policy_loss.item()
+        log_dict["vdice_loss/semi_s_policy_loss"] = policy_loss.item()
 
         policy_out = self.semi_a_actor(observations)
         bc_losses = -policy_out.log_prob(actions).sum(-1, keepdim=False)
@@ -460,7 +466,7 @@ class VDICE:
         policy_loss.backward()
         self.semi_a_actor_optimizer.step()
         self.semi_a_actor_lr_schedule.step()
-        log_dict["vdice_train/semi_a_policy_loss"] = policy_loss.item()
+        log_dict["vdice_loss/semi_a_policy_loss"] = policy_loss.item()
 
         policy_out = self.true_sa_actor(observations)
         bc_losses = -policy_out.log_prob(actions).sum(-1, keepdim=False)
@@ -469,7 +475,16 @@ class VDICE:
         policy_loss.backward()
         self.true_sa_actor_optimizer.step()
         self.true_sa_actor_lr_schedule.step()
-        log_dict["vdice_train/true_sa_policy_loss"] = policy_loss.item()
+        log_dict["vdice_loss/true_sa_policy_loss"] = policy_loss.item()
+
+        policy_out = self.bc_actor(observations)
+        bc_losses = -policy_out.log_prob(actions).sum(-1, keepdim=False)
+        policy_loss = torch.mean(bc_losses)
+        self.bc_actor_optimizer.zero_grad()
+        policy_loss.backward()
+        self.bc_actor_optimizer.step()
+        self.bc_actor_lr_schedule.step()
+        log_dict["vdice_loss/bc_policy_loss"] = policy_loss.item()
         
 
     
@@ -481,7 +496,6 @@ class VDICE:
             rewards,
             next_observations,
             dones,
-            # flags,
         ) = batch
         log_dict = {}
         flags = torch.ones_like(rewards)
@@ -510,13 +524,16 @@ class VDICE:
                                     next_observations, 
                                     dones, 
                                     log_dict)
+        
+        # TODO: init_observations is not the same always
+        init_observations = torch.as_tensor(np.array([[12.5, 4.5]] * observations.shape[0], dtype=np.float32), device=self.device)
 
         # Update Mu function
         self._update_mu(s_a_weight, 
                         observations, 
                         next_observations, 
                         dones, 
-                        observations, 
+                        init_observations, 
                         log_dict)
 
         # Update actor
@@ -607,6 +624,37 @@ class VDICE:
             true_sa_weight = f_prime_inverse(self.f_name, true_residual)
         
         return semi_s_weight, semi_a_weight, true_sa_weight
+    
+    def get_value(self,
+                    observations=None,
+                    env=None):
+        if observations is None:
+            state_map = np.empty(env.walls.shape + (2,), dtype=np.float32)
+            for x in range(env.walls.shape[1]):
+                for y in range(env.walls.shape[0]):
+                    state_map[y, x] = np.array([y+0.5, x+0.5])
+            observations = torch.as_tensor(state_map.reshape(-1, 2), device=self.device, dtype=torch.float32)
+            with torch.no_grad():
+                state_value = self.U(observations)
+                action_state_value = self.semi_v(observations)
+                true_state_value = self.true_v(observations)
+            state_value = state_value.cpu().numpy().reshape(env.walls.shape[0], env.walls.shape[1],)
+            action_state_value = action_state_value.cpu().numpy().reshape(env.walls.shape[0], env.walls.shape[1],)
+            true_state_value = true_state_value.cpu().numpy().reshape(env.walls.shape[0], env.walls.shape[1],)
+            # find the min valve of the state value which is not wall
+            state_value[env.walls] = np.min(state_value[env.walls == 0])
+            action_state_value[env.walls] = np.min(action_state_value[env.walls == 0])
+            true_state_value[env.walls] = np.min(true_state_value[env.walls == 0])
+        else:
+            with torch.no_grad():
+                state_value = self.U(observations)
+                action_state_value = self.semi_v(observations)
+                true_state_value = self.true_v(observations)
+                state_value = state_value.cpu().numpy()
+                action_state_value = action_state_value.cpu().numpy()
+                true_state_value = true_state_value.cpu().numpy()
+
+        return state_value, action_state_value, true_state_value
 
 def trainer_init(config: TrainConfig, env):
     state_dim = env.observation_space.shape[0]
@@ -624,6 +672,7 @@ def trainer_init(config: TrainConfig, env):
         os.makedirs(config.checkpoints_path+"/gif/semi_s", exist_ok=True)
         os.makedirs(config.checkpoints_path+"/gif/semi_a", exist_ok=True)
         os.makedirs(config.checkpoints_path+"/gif/true_s_and_a", exist_ok=True)
+        os.makedirs(config.checkpoints_path+"/gif/bc", exist_ok=True)
 
 
         with open(os.path.join(config.checkpoints_path, "config.yaml"), "w") as f:
@@ -796,7 +845,7 @@ def get_weights(dataset, trainer):
 
     return semi_s_weight, semi_a_weight, semi_s_or_a_weight, semi_s_and_a_weight, true_sa_weight
 
-def draw_traj(weights, dataset, env, save_path=None, trajectories=None):
+def draw_traj(weights, dataset, env, save_path=None, trajectories=None, values=None):
     # select the observation in dataset with weights > 0
     selected_obs = dataset["observations"][weights]
     selected_next_obs = dataset["next_observations"][weights]
@@ -811,6 +860,7 @@ def draw_traj(weights, dataset, env, save_path=None, trajectories=None):
                                                             next_obs=selected_next_obs,
                                                             terminals=selected_terminals,
                                                             trajectories=trajectories,
+                                                            values=values,
                                                             save_path=save_path)
     
     return selected_traj_img
@@ -884,7 +934,8 @@ def train(config: TrainConfig):
         batch = replay_buffer.sample(config.batch_size)
         batch = [b.to(config.device) for b in batch]
         semi_log_dict = semi_trainer.train(batch)
-        semi_log_dict["vdice_step"] = t        
+        semi_log_dict["vdice_step"] = t
+        semi_log_dict["value_step"] = t      
 
         wandb.log(semi_log_dict,)
 
@@ -910,6 +961,10 @@ def train(config: TrainConfig):
             policy_log_dict["policy_train/true_s_and_a_epi_len"], \
             true_s_and_a_traj = eval_policy(semi_trainer.true_sa_actor, t, config.checkpoints_path+"/gif/true_s_and_a", config.device, wandb, "true_s_and_a_perform")
             
+            policy_log_dict["policy_train/bc_perform"], \
+            policy_log_dict["policy_train/bc_epi_len"], \
+            bc_traj = eval_policy(semi_trainer.bc_actor, t, config.checkpoints_path+"/gif/bc", config.device, wandb, "bc_perform")
+
             policy_log_dict["policy_step"] = t 
             wandb.log(policy_log_dict,)
             print("==============================")
@@ -921,19 +976,23 @@ def train(config: TrainConfig):
                     os.path.join(config.checkpoints_path+"/model", f"checkpoint_{t}.pt"),
                 )
                 
-
+                semi_s_state_value, semi_a_state_value, true_s_and_a_state_value = semi_trainer.get_value(env=env)
                 semi_s_weight, semi_a_weight, semi_s_or_a_weight, semi_s_and_a_weight, true_sa_weight = get_weights(temp_dataset, semi_trainer)
                 weights_dict = {
                     "semi_s": semi_s_weight,
                     "semi_a": semi_a_weight,
                     "semi_s_or_a": semi_s_or_a_weight,
                     "semi_s_and_a": semi_s_and_a_weight,
-                    "true_s_and_a": true_sa_weight
+                    "true_s_and_a": true_sa_weight,
+                    "bc": np.ones_like(semi_s_weight)
                 }
                 for key, weights in weights_dict.items():
                     save_dir = config.checkpoints_path + "/selected_traj/" + key
                     os.makedirs(save_dir, exist_ok=True)
-                    selected_img  = draw_traj(weights, temp_dataset, env, save_path = save_dir + "/" + str(t) + ".png", trajectories=locals()[key+"_traj"])
+                    values = None
+                    if key == "semi_s" or key == "semi_a" or key == "true_s_and_a":
+                        values = locals()[key+"_state_value"]
+                    selected_img  = draw_traj(weights, temp_dataset, env, save_path = save_dir + "/" + str(t) + ".png", trajectories=locals()[key+"_traj"], values=values)
                     weights_dict[key] = selected_img
                 
                 wandb.log({"selected_traj/" + "semi_s": wandb.Image(weights_dict["semi_s"]),
@@ -941,6 +1000,7 @@ def train(config: TrainConfig):
                            "selected_traj/" + "semi_s_or_a": wandb.Image(weights_dict["semi_s_or_a"]),
                            "selected_traj/" + "semi_s_and_a": wandb.Image(weights_dict["semi_s_and_a"]),
                            "selected_traj/" + "true_s_and_a": wandb.Image(weights_dict["true_s_and_a"]),
+                           "selected_traj/" + "bc": wandb.Image(weights_dict["bc"]),
                            "selected_traj_step" : t,
                            },)
             
@@ -959,11 +1019,11 @@ def train(config: TrainConfig):
                     selected_img  = draw_traj(weights, temp_expert_dataset, env, save_path = save_dir + "/" + str(t) + ".png")
                     weights_dict[key] = selected_img
                 
-                wandb.log({"selected_expert_traj/" + "semi_s": wandb.Image(np.moveaxis(np.transpose(weights_dict["semi_s"]), 0, -1)),
-                           "selected_expert_traj/" + "semi_a": wandb.Image(np.moveaxis(np.transpose(weights_dict["semi_a"]), 0, -1)),
-                           "selected_expert_traj/" + "semi_s_or_a": wandb.Image(np.moveaxis(np.transpose(weights_dict["semi_s_or_a"]), 0, -1)),
-                           "selected_expert_traj/" + "semi_s_and_a": wandb.Image(np.moveaxis(np.transpose(weights_dict["semi_s_and_a"]), 0, -1)),
-                           "selected_expert_traj/" + "true_s_and_a": wandb.Image(np.moveaxis(np.transpose(weights_dict["true_s_and_a"]), 0, -1)),
+                wandb.log({"selected_expert_traj/" + "semi_s": wandb.Image(weights_dict["semi_s"]),
+                           "selected_expert_traj/" + "semi_a": wandb.Image(weights_dict["semi_a"]),
+                           "selected_expert_traj/" + "semi_s_or_a": wandb.Image(weights_dict["semi_s_or_a"]),
+                           "selected_expert_traj/" + "semi_s_and_a": wandb.Image(weights_dict["semi_s_and_a"]),
+                           "selected_expert_traj/" + "true_s_and_a": wandb.Image(weights_dict["true_s_and_a"]),
                            "selected_expert_traj_step" : t,
                            },)
 

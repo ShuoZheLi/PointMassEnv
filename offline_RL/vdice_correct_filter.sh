@@ -3,20 +3,18 @@
 # List of session names
 env_1="antmaze-umaze-v2"
 env_2="antmaze-umaze-v2"
-project="discrete_empty_room_offline_400_alpha"
 conda_env="corl_0"
-checkpoints_path_base="discrete_empty_room_offline_400_alpha"
+project="discrete_empty_room_offline_init_s_value_map"
+checkpoints_path_base="discrete_empty_room_offline_init_s_value_map"
 
 env_name="EmptyRoom"
 discrete_action="True"
 normalize_state=(False)
 normalize_reward_values=(True)
 discount_values=(0.99)
-# true_dice_alpha_values=(1 1.5 2)
-true_dice_alpha_values=(1)
-# semi_dice_lambda_values=(0.3 0.4 0.5 0.6)
+true_dice_alpha_values=(1 1.5 2 3 4)
 semi_dice_lambda_values=(0.2 0.4 0.6 0.8)
-percent_expert="0.14"
+percent_expert="0"
 
 eval_freq="5000"
 save_freq="5000"
@@ -26,7 +24,7 @@ hidden_dim="256"
 
 
 seed=(100)
-GPUS=(0)
+GPUS=(0 1 2 3)
 
 # Initialize an experiment counter
 experiment_counter=0
@@ -64,8 +62,8 @@ for normalize_reward in "${normalize_reward_values[@]}"; do
           tmux new-session -d -s $session_name
 
           # Activate the conda environment
-          # tmux send-keys -t $session_name "source /data/shuozhe/miniconda3/bin/activate $conda_env" C-m
-          tmux send-keys -t $session_name "conda activate $conda_env" C-m
+          tmux send-keys -t $session_name "source /data/shuozhe/miniconda3/bin/activate $conda_env" C-m
+          # tmux send-keys -t $session_name "conda activate $conda_env" C-m
 
           # Start the experiment with the specified parameters
           tmux send-keys -t $session_name "CUDA_VISIBLE_DEVICES=$device \

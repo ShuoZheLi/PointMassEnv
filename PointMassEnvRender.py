@@ -2,6 +2,8 @@ from PIL import Image, ImageDraw, ImageFilter
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
+from matplotlib.colors import Normalize
+from matplotlib.cm import hot
 
 ##########################
 ##### render methods #####
@@ -41,7 +43,7 @@ def get_env_frame(self, pos, goal, save_path='env_frame.png'):
     img_array = np.moveaxis(np.transpose(img_array), 0, -1)
     return img_array
 
-def get_env_frame_with_selected_traj_plt(self, start=None, goal=None, obs=None, next_obs=None, trajectories=None, terminals=None, save_path=None):
+def get_env_frame_with_selected_traj_plt(self, start=None, goal=None, obs=None, next_obs=None, terminals=None, trajectories=None, values=None, save_path=None):
     
     if start is None:
         start = self._start
@@ -53,12 +55,18 @@ def get_env_frame_with_selected_traj_plt(self, start=None, goal=None, obs=None, 
 
     fig, ax = plt.subplots(figsize=(8, 8))
 
-    # Draw walls
+    if values is not None:
+        norm = Normalize(vmin=np.min(values), vmax=np.max(values))
+    # Draw walls and color cells based on values
     for y in range(self._walls.shape[0]):
         for x in range(self._walls.shape[1]):
+            face_color = 'white'
             if self._walls[y, x] == 1:
-                rect = patches.Rectangle((x, y), 1, 1, linewidth=0, edgecolor='none', facecolor='black')
-                ax.add_patch(rect)
+                face_color = 'black'
+            elif values is not None:
+                face_color = hot(norm(values[y, x]))
+            rect = patches.Rectangle((x, y), 1, 1, linewidth=0, edgecolor='none', facecolor=face_color)
+            ax.add_patch(rect)
 
     # Draw start and goal
     ax.add_patch(patches.Circle((start[1] + 0.5, start[0] + 0.5), 0.5, color='blue'))
@@ -70,10 +78,10 @@ def get_env_frame_with_selected_traj_plt(self, start=None, goal=None, obs=None, 
             continue
         start = obs[i] - 0.5
         end = next_obs[i] - 0.5
-        ax.plot([start[1] + 0.5, end[1] + 0.5], [start[0] + 0.5, end[0] + 0.5], color='red', linewidth=1)
+        ax.plot([start[1] + 0.5, end[1] + 0.5], [start[0] + 0.5, end[0] + 0.5], color='green', linewidth=1)
         ax.annotate('', xy=(end[1] + 0.5, end[0] + 0.5), xytext=(start[1] + 0.5, start[0] + 0.5),
                     # arrowprops=dict(facecolor='red', shrink=0.1, width=1, headwidth=4, headlength=4)
-                    arrowprops=dict(arrowstyle='->', color='red', shrinkA=0, shrinkB=0, linewidth=2)
+                    arrowprops=dict(arrowstyle='->', color='green', shrinkA=0, shrinkB=0, linewidth=2)
                     
                     )
 
@@ -110,7 +118,6 @@ def get_env_frame_with_selected_traj_plt(self, start=None, goal=None, obs=None, 
     # Flip the image upside down
     img_array = np.flipud(img_array)
 
-    # img_array = np.moveaxis(np.transpose(img_array), 0, -1)
 
     # Save the image if save_path is specified
     if save_path is not None:
@@ -181,7 +188,7 @@ def draw_arrowhead(self, draw, start, end, arrow_size=2.5, color='green'):
                 end[0] * 10 + 5 - arrow_size * np.sin(angle + np.pi / 6))
     draw.polygon([arrow_p1, (end[1] * 10 + 5, end[0] * 10 + 5), arrow_p2], fill=color)
 
-def draw_trajectory(self, draw, trajectories, color='red'):
+def draw_trajectory(self, draw, trajectories, color='green'):
     # Draw trajectories with fading colors
     for trajectory in trajectories:
         num_segments = len(trajectory) - 1

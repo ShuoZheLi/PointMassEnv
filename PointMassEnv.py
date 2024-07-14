@@ -227,6 +227,10 @@ class PointMassEnv(gym.Env[np.ndarray, Union[int, np.ndarray]]):
 
         return current_state, valid
 
+    @property
+    def walls(self):
+        return self._walls
+
     ##########################
     #### state validation ####
     ##########################
