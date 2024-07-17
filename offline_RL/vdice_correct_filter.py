@@ -282,9 +282,10 @@ class VDICE:
         with torch.no_grad():
             target_q = self.q_target(observations, actions)
 
+        semi_v_linear = self.semi_v(init_observations)
         semi_v = self.semi_v(observations)
         adv = target_q - semi_v
-        semi_linear_loss = (1 - self.semi_dice_lambda) * semi_v
+        semi_linear_loss = (1 - self.semi_dice_lambda) * semi_v_linear
         # TODO: why frenchel_duaL here
         forward_dual_loss = self.semi_dice_lambda * frenchel_dual(self.f_name, adv)
         semi_v_loss = semi_linear_loss + forward_dual_loss
@@ -502,13 +503,17 @@ class VDICE:
 
         rewards = rewards.squeeze(dim=-1)
         dones = dones.squeeze(dim=-1)
+
+        # TODO: init_observations is not the same always
+        init_observations = torch.as_tensor(np.array([[12.5, 4.5]] * observations.shape[0], dtype=np.float32), device=self.device)
+
         # Update V function
         semi_residual, true_residual = self._update_v(observations, 
                                                       actions, 
                                                       next_observations, 
                                                       rewards, 
                                                       dones, 
-                                                      observations, 
+                                                      init_observations, 
                                                       log_dict)
         # Update Q function
         self._update_q(observations, 
@@ -525,8 +530,6 @@ class VDICE:
                                     dones, 
                                     log_dict)
         
-        # TODO: init_observations is not the same always
-        init_observations = torch.as_tensor(np.array([[12.5, 4.5]] * observations.shape[0], dtype=np.float32), device=self.device)
 
         # Update Mu function
         self._update_mu(s_a_weight, 
