@@ -282,8 +282,8 @@ class VDICE:
         with torch.no_grad():
             target_q = self.q_target(observations, actions)
 
-        semi_v_linear = self.semi_v(init_observations)
-        semi_v = self.semi_v(observations)
+        # semi_v_linear = self.semi_v(init_observations)
+        semi_v = semi_v_linear = self.semi_v(observations)
         adv = target_q - semi_v
         semi_linear_loss = (1 - self.semi_dice_lambda) * semi_v_linear
         # TODO: why frenchel_duaL here
