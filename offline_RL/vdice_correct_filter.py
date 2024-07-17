@@ -50,7 +50,7 @@ class TrainConfig:
     save_freq: int = int(5e3)  # How often (time steps) save the model
     update_freq: int = int(1.5e5)  # How often (time steps) we update the model
     n_episodes: int = 10  # How many episodes run during evaluation
-    max_timesteps: int = int(6e6)  # Max time steps to run environment
+    max_timesteps: int = int(1e6)  # Max time steps to run environment
     buffer_size: int = 2_000_000  # Replay buffer size
     batch_size: int = 256  # Batch size for all networks
     # discount: float = 0.99  # Discount factor
