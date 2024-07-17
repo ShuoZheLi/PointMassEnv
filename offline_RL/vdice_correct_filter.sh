@@ -4,8 +4,8 @@
 env_1="antmaze-umaze-v2"
 env_2="antmaze-umaze-v2"
 conda_env="corl_0"
-project="discrete_empty_room_offline_init_s_value_map"
-checkpoints_path_base="discrete_empty_room_offline_init_s_value_map"
+project="init_s_linear_loss"
+checkpoints_path_base="init_s_linear_loss"
 
 env_name="EmptyRoom"
 discrete_action="True"
@@ -23,7 +23,7 @@ batch_size="256"
 hidden_dim="256"
 
 
-seed=(100)
+seed=(41)
 GPUS=(0 1 2 3)
 
 # Initialize an experiment counter
