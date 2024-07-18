@@ -8,7 +8,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
-import d4rl
+# import d4rl
 import gymnasium as gym
 import numpy as np
 import pyrallis
@@ -432,33 +432,36 @@ class VDICE:
         log_dict["vdice_loss/s_weight"] = semi_s_weight.mean().item()
 
 
-        policy_out = self.semi_sa_actor_and(observations)
-        bc_losses = -policy_out.log_prob(actions).sum(-1, keepdim=False)
-        policy_loss = torch.mean(semi_a_weight * semi_s_weight * bc_losses)
-        self.semi_sa_actor_and_optimizer.zero_grad()
-        policy_loss.backward()
-        self.semi_sa_actor_and_optimizer.step()
-        self.semi_sa_actor_and_lr_schedule.step()
-        log_dict["vdice_loss/semi_sa_policy_loss"] = policy_loss.item()
+        
 
-        policy_out = self.semi_sa_actor_or(observations)
-        bc_losses = -policy_out.log_prob(actions).sum(-1, keepdim=False)
-        semi_a_or_s_weight = torch.max(semi_a_weight, semi_s_weight)
-        policy_loss = torch.mean(semi_a_or_s_weight * bc_losses)
-        self.semi_sa_actor_or_optimizer.zero_grad()
-        policy_loss.backward()
-        self.semi_sa_actor_or_optimizer.step()
-        self.semi_sa_actor_or_lr_schedule.step()
-        log_dict["vdice_loss/semi_sa_or_policy_loss"] = policy_loss.item()
+        if self.total_it >= 3e5:
+            policy_out = self.semi_s_actor(observations)
+            bc_losses = -policy_out.log_prob(actions).sum(-1, keepdim=False)
+            policy_loss = torch.mean(semi_s_weight * bc_losses)
+            self.semi_s_actor_optimizer.zero_grad()
+            policy_loss.backward()
+            self.semi_s_actor_optimizer.step()
+            self.semi_s_actor_lr_schedule.step()
+            log_dict["vdice_loss/semi_s_policy_loss"] = policy_loss.item()
 
-        policy_out = self.semi_s_actor(observations)
-        bc_losses = -policy_out.log_prob(actions).sum(-1, keepdim=False)
-        policy_loss = torch.mean(semi_s_weight * bc_losses)
-        self.semi_s_actor_optimizer.zero_grad()
-        policy_loss.backward()
-        self.semi_s_actor_optimizer.step()
-        self.semi_s_actor_lr_schedule.step()
-        log_dict["vdice_loss/semi_s_policy_loss"] = policy_loss.item()
+            policy_out = self.semi_sa_actor_and(observations)
+            bc_losses = -policy_out.log_prob(actions).sum(-1, keepdim=False)
+            policy_loss = torch.mean(semi_a_weight * semi_s_weight * bc_losses)
+            self.semi_sa_actor_and_optimizer.zero_grad()
+            policy_loss.backward()
+            self.semi_sa_actor_and_optimizer.step()
+            self.semi_sa_actor_and_lr_schedule.step()
+            log_dict["vdice_loss/semi_sa_policy_loss"] = policy_loss.item()
+
+            policy_out = self.semi_sa_actor_or(observations)
+            bc_losses = -policy_out.log_prob(actions).sum(-1, keepdim=False)
+            semi_a_or_s_weight = torch.max(semi_a_weight, semi_s_weight)
+            policy_loss = torch.mean(semi_a_or_s_weight * bc_losses)
+            self.semi_sa_actor_or_optimizer.zero_grad()
+            policy_loss.backward()
+            self.semi_sa_actor_or_optimizer.step()
+            self.semi_sa_actor_or_lr_schedule.step()
+            log_dict["vdice_loss/semi_sa_or_policy_loss"] = policy_loss.item()
 
         policy_out = self.semi_a_actor(observations)
         bc_losses = -policy_out.log_prob(actions).sum(-1, keepdim=False)
@@ -523,22 +526,23 @@ class VDICE:
                        dones, 
                        log_dict)
         
-        # Update U function
-        s_a_weight = self._update_U(semi_residual, 
-                                    observations, 
-                                    next_observations, 
-                                    dones, 
-                                    log_dict)
-        
+        if self.total_it >= 3e5:
 
-        # Update Mu function
-        self._update_mu(s_a_weight, 
-                        observations, 
-                        next_observations, 
-                        dones, 
-                        init_observations, 
-                        log_dict)
+            # Update Mu function
+            self._update_mu(s_a_weight, 
+                            observations, 
+                            next_observations, 
+                            dones, 
+                            init_observations, 
+                            log_dict)
 
+            # Update U function
+            s_a_weight = self._update_U(semi_residual, 
+                                        observations, 
+                                        next_observations, 
+                                        dones, 
+                                        log_dict)
+            
         # Update actor
         self._update_policy(observations, 
                             next_observations, 

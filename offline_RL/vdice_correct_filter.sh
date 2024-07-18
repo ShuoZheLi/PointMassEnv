@@ -4,16 +4,25 @@
 env_1="antmaze-umaze-v2"
 env_2="antmaze-umaze-v2"
 conda_env="corl_0"
-project="init_s_linear_loss"
-checkpoints_path_base="init_s_linear_loss"
+project="mature_v_q"
+checkpoints_path_base="mature_v_q"
 
 env_name="EmptyRoom"
 discrete_action="True"
 normalize_state=(False)
 normalize_reward_values=(True)
 discount_values=(0.99)
-true_dice_alpha_values=(1 1.5 2 3 4)
-semi_dice_lambda_values=(0.2 0.4 0.6 0.8)
+# semi_dice_lambda_values=(0.2 0.4 0.6 0.8)
+# true_dice_alpha_values=(1)
+# semi_dice_lambda_values=(0.2)
+# true_dice_alpha_values=(1.5 2 3 4)
+
+# semi_dice_lambda_values=(0.7)
+# true_dice_alpha_values=(0.5)
+
+semi_dice_lambda_values=(0.5)
+true_dice_alpha_values=(0.25)
+
 percent_expert="0"
 
 eval_freq="5000"
@@ -23,8 +32,9 @@ batch_size="256"
 hidden_dim="256"
 
 
-seed=(41)
-GPUS=(0 1 2 3)
+seed=(19990526)
+# GPUS=(1 2 3)
+GPUS=(3)
 
 # Initialize an experiment counter
 experiment_counter=0

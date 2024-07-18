@@ -30,7 +30,7 @@ def resize_walls(walls, factor):
 class PointMassEnv(gym.Env[np.ndarray, Union[int, np.ndarray]]):
     """Class for 2D navigation in PointMass environment."""
 
-    from PointMassEnvRender import get_env_frame, get_env_frame_with_traj, get_env_frame_with_selected_traj, draw_arrowhead, draw_trajectory, get_env_frame_with_selected_traj_plt
+    from PointMassEnvRender import get_env_frame, get_env_frame_with_traj, get_env_frame_with_selected_traj, draw_arrowhead, draw_trajectory, get_env_frame_with_selected_traj_plt, get_env_frame_with_selected_traj_plt_val_num
 
     def __init__(self,
                 env_name='FourRooms',
