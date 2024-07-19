@@ -21,3 +21,5 @@ cython==0.29.32
 imageio
 pygame
 gymnasium
+stable_baselines3
+tensorboard

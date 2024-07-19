@@ -4,8 +4,8 @@
 env_1="antmaze-umaze-v2"
 env_2="antmaze-umaze-v2"
 conda_env="corl_0"
-project="mature_v_q"
-checkpoints_path_base="mature_v_q"
+project="2_mature_v_q_goal_1_wall_n10"
+checkpoints_path_base="2_mature_v_q_goal_1_wall_n10"
 
 env_name="EmptyRoom"
 discrete_action="True"
@@ -33,7 +33,7 @@ hidden_dim="256"
 
 
 seed=(19990526)
-# GPUS=(1 2 3)
+# GPUS=(2 3 1)
 GPUS=(3)
 
 # Initialize an experiment counter

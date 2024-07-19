@@ -527,6 +527,13 @@ class VDICE:
                        log_dict)
         
         if self.total_it >= 3e5:
+            
+            # Update U function
+            s_a_weight = self._update_U(semi_residual, 
+                                        observations, 
+                                        next_observations, 
+                                        dones, 
+                                        log_dict)
 
             # Update Mu function
             self._update_mu(s_a_weight, 
@@ -536,12 +543,6 @@ class VDICE:
                             init_observations, 
                             log_dict)
 
-            # Update U function
-            s_a_weight = self._update_U(semi_residual, 
-                                        observations, 
-                                        next_observations, 
-                                        dones, 
-                                        log_dict)
             
         # Update actor
         self._update_policy(observations, 

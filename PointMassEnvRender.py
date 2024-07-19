@@ -81,10 +81,7 @@ def get_env_frame_with_selected_traj_plt(self, start=None, goal=None, obs=None, 
         end = next_obs[i] - 0.5
         ax.plot([start[1] + 0.5, end[1] + 0.5], [start[0] + 0.5, end[0] + 0.5], color='green', linewidth=1)
         ax.annotate('', xy=(end[1] + 0.5, end[0] + 0.5), xytext=(start[1] + 0.5, start[0] + 0.5),
-                    # arrowprops=dict(facecolor='red', shrink=0.1, width=1, headwidth=4, headlength=4)
-                    arrowprops=dict(arrowstyle='->', color='green', shrinkA=0, shrinkB=0, linewidth=2)
-                    
-                    )
+                    arrowprops=dict(arrowstyle='->', color='green', shrinkA=0, shrinkB=0, linewidth=2))
 
     if trajectories is not None:
         for trajectory in trajectories:
@@ -93,9 +90,7 @@ def get_env_frame_with_selected_traj_plt(self, start=None, goal=None, obs=None, 
             for j in range(len(traj_points) - 1):
                 ax.annotate('', xy=(traj_points[j+1, 1] + 0.5, traj_points[j+1, 0] + 0.5),
                             xytext=(traj_points[j, 1] + 0.5, traj_points[j, 0] + 0.5),
-                            arrowprops=dict(arrowstyle='->', color='blue', shrinkA=0, shrinkB=0, linewidth=1)
-                            
-                            )
+                            arrowprops=dict(arrowstyle='->', color='blue', shrinkA=0, shrinkB=0, linewidth=1))
 
     # Draw grid
     ax.set_xticks(np.arange(0, self._walls.shape[1], 1))
@@ -119,11 +114,13 @@ def get_env_frame_with_selected_traj_plt(self, start=None, goal=None, obs=None, 
     # Flip the image upside down
     img_array = np.flipud(img_array)
 
-
     # Save the image if save_path is specified
     if save_path is not None:
         img = Image.fromarray(img_array)
         img.save(save_path)
+
+    # Close the figure to release resources
+    plt.close(fig)
 
     return img_array
 
