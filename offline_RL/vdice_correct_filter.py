@@ -115,7 +115,7 @@ def wandb_init(config: dict) -> None:
     )
     wandb.run.save()
     wandb.save(os.path.abspath(__file__))
-
+    wandb.save("*.py")
 
     wandb.define_metric("vdice_step")
     wandb.define_metric("value_step")
