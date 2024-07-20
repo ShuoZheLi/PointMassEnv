@@ -46,8 +46,8 @@ class TrainConfig:
     ######### Experiment ########
     #############################
     seed: int = 100
-    eval_freq: int = int(5e3)  # How often (time steps) we evaluate
-    save_freq: int = int(5e3)  # How often (time steps) save the model
+    eval_freq: int = int(10)  # How often (time steps) we evaluate
+    save_freq: int = int(10)  # How often (time steps) save the model
     update_freq: int = int(1.5e5)  # How often (time steps) we update the model
     n_episodes: int = 10  # How many episodes run during evaluation
     max_timesteps: int = int(1e6)  # Max time steps to run environment
@@ -752,8 +752,8 @@ def create_dataset(config: TrainConfig):
                                 goal_radius=0.8,
                                 env_name=config.env_name,
                                 reward_type=config.reward_type)
-    dataset = np.load("new_dataset_wall_n10.npy", allow_pickle=True)
-    import pdb; pdb.set_trace()
+    dataset = np.load("dataset.npy", allow_pickle=True)
+    # import pdb; pdb.set_trace()
     expert_dataset = np.load("expert_dataset.npy", allow_pickle=True)
 
     expert_idx = np.random.choice(np.arange(int(dataset["observations"].shape[0])), int(config.percent_expert * dataset["observations"].shape[0]), 
