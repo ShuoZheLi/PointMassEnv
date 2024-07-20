@@ -28,7 +28,7 @@ from offline_RL.utils import TwinQ, ValueFunction, GaussianPolicy, Deterministic
 
 from PointMassEnv import PointMassEnv, WALLS
 import imageio
-
+import yaml
 
 TensorBatch = List[torch.Tensor]
 
@@ -79,6 +79,7 @@ class TrainConfig:
     #############################
     project: str = "test"
     checkpoints_path: Optional[str] = "test"
+    load_model: str = ""  # Model load file name, "" doesn't load
     alg: str = "test"
     env_1: str = "antmaze-umaze-v2"  # OpenAI gym environment name
     env_2: str = "antmaze-umaze-v2"  # OpenAI gym environment name
@@ -646,23 +647,28 @@ class VDICE:
                 state_value = self.U(observations)
                 action_state_value = self.semi_v(observations)
                 true_state_value = self.true_v(observations)
+                mu_state_value = self.mu(observations)
             state_value = state_value.cpu().numpy().reshape(env.walls.shape[0], env.walls.shape[1],)
             action_state_value = action_state_value.cpu().numpy().reshape(env.walls.shape[0], env.walls.shape[1],)
             true_state_value = true_state_value.cpu().numpy().reshape(env.walls.shape[0], env.walls.shape[1],)
+            mu_state_value = mu_state_value.cpu().numpy().reshape(env.walls.shape[0], env.walls.shape[1],)
             # find the min valve of the state value which is not wall
             state_value[env.walls] = np.min(state_value[env.walls == 0])
             action_state_value[env.walls] = np.min(action_state_value[env.walls == 0])
             true_state_value[env.walls] = np.min(true_state_value[env.walls == 0])
+            mu_state_value[env.walls] = np.min(mu_state_value[env.walls == 0])
         else:
             with torch.no_grad():
                 state_value = self.U(observations)
                 action_state_value = self.semi_v(observations)
                 true_state_value = self.true_v(observations)
+                mu_state_value = self.mu(observations)
                 state_value = state_value.cpu().numpy()
                 action_state_value = action_state_value.cpu().numpy()
                 true_state_value = true_state_value.cpu().numpy()
+                mu_state_value = mu_state_value.cpu().numpy()
 
-        return state_value, action_state_value, true_state_value
+        return state_value, action_state_value, true_state_value, mu_state_value
 
 def trainer_init(config: TrainConfig, env):
     state_dim = env.observation_space.shape[0]
@@ -746,7 +752,8 @@ def create_dataset(config: TrainConfig):
                                 goal_radius=0.8,
                                 env_name=config.env_name,
                                 reward_type=config.reward_type)
-    dataset = np.load("dataset.npy", allow_pickle=True)
+    dataset = np.load("new_dataset_wall_n10.npy", allow_pickle=True)
+    import pdb; pdb.set_trace()
     expert_dataset = np.load("expert_dataset.npy", allow_pickle=True)
 
     expert_idx = np.random.choice(np.arange(int(dataset["observations"].shape[0])), int(config.percent_expert * dataset["observations"].shape[0]), 
@@ -875,11 +882,45 @@ def draw_traj(weights, dataset, env, save_path=None, trajectories=None, values=N
 
 @pyrallis.wrap()
 def train(config: TrainConfig):
+
+    # parent_folder = os.path.dirname(config.checkpoints_path)
+    # contents = os.listdir(parent_folder)
+
+    # # Filter out non-directory files (if any)
+    # child_folders = [item for item in contents if os.path.isdir(os.path.join(parent_folder, item))]
+
+    # # Assuming there is only one child folder
+    # child_folder = child_folders[0]
+
+    # # Construct the path to the target file
+    # target_file_path = os.path.join(parent_folder, child_folder, 'config.yaml')
+
+    # file_name = target_file_path
+    # # read parameters from yaml file into config
+    # with open(file_name, "r") as stream:
+    #     try:
+    #         yaml_config = yaml.safe_load(stream)
+    #         for key, value in yaml_config.items():
+    #             setattr(config, key, value)
+    #     except yaml.YAMLError as exc:
+    #         print(exc)
+
     dataset, expert_dataset, state_dim, action_dim, env = create_dataset(config)
 
     if config.normalize_reward:
         modify_reward(dataset, config.env_1)
         modify_reward(expert_dataset, config.env_1)
+
+    # modify reward
+    for i in range(dataset["observations"].shape[0]):
+        obs = dataset["observations"][i]
+        if np.linalg.norm(obs - env._goal) < env._goal_radius:
+            dataset["reward"][i] = 1
+
+    for i in range(expert_dataset["observations"].shape[0]):
+        obs = expert_dataset["observations"][i]
+        if np.linalg.norm(obs - env._goal) < env._goal_radius:
+            expert_dataset["reward"][i] = 1
 
     if config.normalize:
         state_mean, state_std = compute_mean_std(dataset["observations"], eps=1e-3)
@@ -905,6 +946,12 @@ def train(config: TrainConfig):
 
     semi_trainer = trainer_init(config, env)
 
+    # load_model = os.path.join(parent_folder, child_folder, 'model/checkpoint_294999.pt')
+    # if load_model != "":
+    #     policy_file = Path(load_model)
+    #     semi_trainer.load_state_dict(torch.load(policy_file))
+
+    # import pdb; pdb.set_trace()
 
     wandb_init(asdict(config))
     t = 0
@@ -984,7 +1031,7 @@ def train(config: TrainConfig):
                     os.path.join(config.checkpoints_path+"/model", f"checkpoint_{t}.pt"),
                 )
                 
-                semi_s_state_value, semi_a_state_value, true_s_and_a_state_value = semi_trainer.get_value(env=env)
+                semi_s_state_value, semi_a_state_value, true_s_and_a_state_value, mu_state_value = semi_trainer.get_value(env=env)
                 semi_s_weight, semi_a_weight, semi_s_or_a_weight, semi_s_and_a_weight, true_sa_weight = get_weights(temp_dataset, semi_trainer)
                 weights_dict = {
                     "semi_s": semi_s_weight,
