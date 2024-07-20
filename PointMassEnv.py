@@ -124,7 +124,7 @@ class PointMassEnv(gym.Env[np.ndarray, Union[int, np.ndarray]]):
 
         if self._reward_type == 'sparse':
             if self.check_success(state):
-                reward = 1
+                reward = 2
         else:
             reward = - np.linalg.norm(state - self._goal)
 
@@ -153,7 +153,8 @@ class PointMassEnv(gym.Env[np.ndarray, Union[int, np.ndarray]]):
         # TODO: we can give penalty for hitting the wall (valid = False)
         reward = self.reward(self.state)
         term = trunc = self.check_success(self.state) or self.epi_length >= self._episode_length or not valid
-
+        if not valid:
+            reward = -10
         return self._get_obs(), reward, term, trunc, {'success': self.check_success(self.state), 'valid': valid}
 
     def render(self):
@@ -269,7 +270,10 @@ if __name__ == '__main__':
     env._goal = np.array(goal[-1], dtype=np.float32)
     obs, _ = env.reset()
 
-    dataset = np.load('dataset.npy', allow_pickle=True)
+    dataset = np.load('new_dataset.npy', allow_pickle=True)
+
+    # import pdb; pdb.set_trace()
+
     # img = env.get_env_frame_with_traj(obs, env._goal, trajectories, save_path='env_frame.png')
     img = env.get_env_frame_with_selected_traj_plt(start=obs, 
                                                goal=env._goal, 

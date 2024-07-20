@@ -97,10 +97,10 @@ class TrainConfig:
     discrete_action: bool = False
     
 
-    def __post_init__(self):
-        self.name = f"{self.alg}-{self.env_1}-{str(uuid.uuid4())[:8]}"
-        if self.checkpoints_path is not None:
-            self.checkpoints_path = os.path.join(self.checkpoints_path, self.name)
+    # def __post_init__(self):
+    #     self.name = f"{self.alg}-{self.env_1}-{str(uuid.uuid4())[:8]}"
+    #     if self.checkpoints_path is not None:
+    #         self.checkpoints_path = os.path.join(self.checkpoints_path, self.name)
 
 
 
