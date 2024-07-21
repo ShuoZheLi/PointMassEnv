@@ -415,19 +415,12 @@ class VDICE:
         terminals: torch.Tensor,
         log_dict: Dict,
     ):
-        with torch.no_grad():
-            target_q = self.q_target(observations, actions)
-            semi_v = self.semi_v(observations)
-            adv = target_q - semi_v
-            semi_a_weight = f_prime_inverse(self.f_name, adv)
-            u = self.U(observations)
-            semi_s_weight = f_prime_inverse(self.f_name, u)
 
-            true_v = self.true_v(observations)
-            true_v_next = self.true_v(next_observations)
-            true_residual = rewards + (1.0 - terminals.float()) * self.discount * true_v_next - true_v
-            true_residual = true_residual / self.true_dice_alpha
-            true_sa_weight = f_prime_inverse(self.f_name, true_residual)
+        semi_s_weight, semi_a_weight, true_sa_weight = self.get_weights(observations, 
+                                                                        next_observations, 
+                                                                        actions, 
+                                                                        rewards, 
+                                                                        terminals)
 
 
         log_dict["vdice_loss/a_weight"] = semi_a_weight.mean().item()
