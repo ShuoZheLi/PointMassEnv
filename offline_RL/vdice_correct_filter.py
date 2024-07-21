@@ -573,12 +573,12 @@ class VDICE:
 
             "semi_s_actor": self.semi_s_actor.state_dict(),
             "semi_s_actor_optimizer": self.semi_s_actor_optimizer.state_dict(),
-            "semi_s_actor_lr_schedule": self.semi_a_actor_lr_schedule.state_dict(),
+            "semi_s_actor_lr_schedule": self.semi_s_actor_lr_schedule.state_dict(),
 
             "semi_a_actor": self.semi_a_actor.state_dict(),
             "semi_a_actor_optimizer": self.semi_a_actor_optimizer.state_dict(),
             "semi_a_actor_lr_schedule": self.semi_a_actor_lr_schedule.state_dict(),
-            
+
             "true_sa_actor": self.true_sa_actor.state_dict(),
             "true_sa_actor_optimizer": self.true_sa_actor_optimizer.state_dict(),
             "true_sa_actor_lr_schedule": self.true_sa_actor_lr_schedule.state_dict(),
