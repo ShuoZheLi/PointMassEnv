@@ -80,6 +80,7 @@ class TrainConfig:
     project: str = "test"
     checkpoints_path: Optional[str] = "test"
     load_model: str = ""  # Model load file name, "" doesn't load
+    load_yaml: str = ""  # Model load file name, "" doesn't load
     alg: str = "test"
     env_1: str = "antmaze-umaze-v2"  # OpenAI gym environment name
     env_2: str = "antmaze-umaze-v2"  # OpenAI gym environment name
@@ -769,8 +770,44 @@ def create_dataset(config: TrainConfig):
     action_dim = env.action_space.shape[0]
     dataset["id"] = np.arange(dataset["actions"].shape[0])
 
+    if config.normalize_reward:
+        modify_reward(dataset, config.env_1)
+        modify_reward(expert_dataset, config.env_1)
 
-    return dataset, expert_dataset, state_dim, action_dim, env
+    # modify reward
+    for i in range(dataset["observations"].shape[0]):
+        obs = dataset["observations"][i]
+        if np.linalg.norm(obs - env._goal) < env._goal_radius:
+            dataset["reward"][i] = 1
+
+    for i in range(expert_dataset["observations"].shape[0]):
+        obs = expert_dataset["observations"][i]
+        if np.linalg.norm(obs - env._goal) < env._goal_radius:
+            expert_dataset["reward"][i] = 1
+
+    if config.normalize:
+        state_mean, state_std = compute_mean_std(dataset["observations"], eps=1e-3)
+    else:
+        state_mean, state_std = 0, 1
+
+    dataset["observations"] = normalize_states(
+        dataset["observations"], state_mean, state_std
+    )
+    dataset["next_observations"] = normalize_states(
+        dataset["next_observations"], state_mean, state_std
+    )
+    env = wrap_env(env, state_mean=state_mean, state_std=state_std)
+
+    replay_buffer = ReplayBuffer(
+        state_dim,
+        action_dim,
+        config.buffer_size,
+        config.device,
+    )
+    replay_buffer.load_d4rl_dataset(dataset)
+
+
+    return dataset, expert_dataset, state_dim, action_dim, env, replay_buffer
 
 def eval_policy(actor, global_step, gif_dir, device, wandb, name):
     env = PointMassEnv(start=np.array([12.5, 4.5], dtype=np.float32), 
@@ -880,83 +917,35 @@ def draw_traj(weights, dataset, env, save_path=None, trajectories=None, values=N
     
     return selected_traj_img
 
+def load_checkpoint(config):
+
+    # read parameters from yaml file into config
+    with open(config.load_yaml, "r") as stream:
+        try:
+            yaml_config = yaml.safe_load(stream)
+            for key, value in yaml_config.items():
+                if key != "project" and key != "checkpoints_path" and key != "load_model" and key != "load_yaml":
+                    setattr(config, key, value)
+        except yaml.YAMLError as exc:
+            print(exc)
+
+    dataset, expert_dataset, state_dim, action_dim, env, replay_buffer = create_dataset(config)
+    semi_trainer = trainer_init(config, env)
+    semi_trainer.load_state_dict(torch.load(config.load_model))
+    return semi_trainer, dataset, expert_dataset, state_dim, action_dim, env, replay_buffer
+
 @pyrallis.wrap()
 def train(config: TrainConfig):
 
-    # parent_folder = os.path.dirname(config.checkpoints_path)
-    # contents = os.listdir(parent_folder)
-
-    # # Filter out non-directory files (if any)
-    # child_folders = [item for item in contents if os.path.isdir(os.path.join(parent_folder, item))]
-
-    # # Assuming there is only one child folder
-    # child_folder = child_folders[0]
-
-    # # Construct the path to the target file
-    # target_file_path = os.path.join(parent_folder, child_folder, 'config.yaml')
-
-    # file_name = target_file_path
-    # # read parameters from yaml file into config
-    # with open(file_name, "r") as stream:
-    #     try:
-    #         yaml_config = yaml.safe_load(stream)
-    #         for key, value in yaml_config.items():
-    #             setattr(config, key, value)
-    #     except yaml.YAMLError as exc:
-    #         print(exc)
-
-    dataset, expert_dataset, state_dim, action_dim, env = create_dataset(config)
-
-    if config.normalize_reward:
-        modify_reward(dataset, config.env_1)
-        modify_reward(expert_dataset, config.env_1)
-
-    # modify reward
-    for i in range(dataset["observations"].shape[0]):
-        obs = dataset["observations"][i]
-        if np.linalg.norm(obs - env._goal) < env._goal_radius:
-            dataset["reward"][i] = 1
-
-    for i in range(expert_dataset["observations"].shape[0]):
-        obs = expert_dataset["observations"][i]
-        if np.linalg.norm(obs - env._goal) < env._goal_radius:
-            expert_dataset["reward"][i] = 1
-
-    if config.normalize:
-        state_mean, state_std = compute_mean_std(dataset["observations"], eps=1e-3)
+    if config.load_model != "":
+        semi_trainer, dataset, expert_dataset, state_dim, action_dim, env, replay_buffer = load_checkpoint(config)
     else:
-        state_mean, state_std = 0, 1
+        dataset, expert_dataset, state_dim, action_dim, env, replay_buffer = create_dataset(config)
+        semi_trainer = trainer_init(config, env)
 
-    dataset["observations"] = normalize_states(
-        dataset["observations"], state_mean, state_std
-    )
-    dataset["next_observations"] = normalize_states(
-        dataset["next_observations"], state_mean, state_std
-    )
-    env = wrap_env(env, state_mean=state_mean, state_std=state_std)
-    
-    replay_buffer = ReplayBuffer(
-        state_dim,
-        action_dim,
-        config.buffer_size,
-        config.device,
-    )
-    replay_buffer.load_d4rl_dataset(dataset)
-
-
-    semi_trainer = trainer_init(config, env)
-
-    # load_model = os.path.join(parent_folder, child_folder, 'model/checkpoint_294999.pt')
-    # if load_model != "":
-    #     policy_file = Path(load_model)
-    #     semi_trainer.load_state_dict(torch.load(policy_file))
-
-    # import pdb; pdb.set_trace()
 
     wandb_init(asdict(config))
     t = 0
-
-    
 
     sample_size = min(2000, len(expert_dataset["observations"]))
     temp_expert_dataset = {}
@@ -980,7 +969,7 @@ def train(config: TrainConfig):
         os.makedirs(save_dir, exist_ok=True)
         full_traj = draw_traj(weights, temp_dataset, env, save_path = save_dir + "/full.png")
         wandb.log({"selected_traj/" + "full_traj": wandb.Image(full_traj),
-                   "selected_traj_step" : 0,
+                   "selected_traj_step" : semi_trainer.total_it,
                    })
         
     while t < int(config.max_timesteps):
@@ -989,8 +978,8 @@ def train(config: TrainConfig):
         batch = replay_buffer.sample(config.batch_size)
         batch = [b.to(config.device) for b in batch]
         semi_log_dict = semi_trainer.train(batch)
-        semi_log_dict["vdice_step"] = t
-        semi_log_dict["value_step"] = t      
+        semi_log_dict["vdice_step"] = semi_trainer.total_it
+        semi_log_dict["value_step"] = semi_trainer.total_it
 
         wandb.log(semi_log_dict,)
 
@@ -998,29 +987,29 @@ def train(config: TrainConfig):
             policy_log_dict = {}
             policy_log_dict["policy_train/semi_s_and_a_perform"], \
             policy_log_dict["policy_train/semi_s_and_a_epi_len"], \
-            semi_s_and_a_traj = eval_policy(semi_trainer.semi_sa_actor_and, t, config.checkpoints_path+"/gif/semi_s_and_a", config.device, wandb, "semi_s_and_a_perform")
+            semi_s_and_a_traj = eval_policy(semi_trainer.semi_sa_actor_and, semi_trainer.total_it, config.checkpoints_path+"/gif/semi_s_and_a", config.device, wandb, "semi_s_and_a_perform")
             
             policy_log_dict["policy_train/semi_s_or_a_perform"], \
             policy_log_dict["policy_train/semi_s_or_a_epi_len"], \
-            semi_s_or_a_traj = eval_policy(semi_trainer.semi_sa_actor_or, t, config.checkpoints_path+"/gif/semi_s_or_a", config.device, wandb, "semi_s_or_a_perform")
+            semi_s_or_a_traj = eval_policy(semi_trainer.semi_sa_actor_or, semi_trainer.total_it, config.checkpoints_path+"/gif/semi_s_or_a", config.device, wandb, "semi_s_or_a_perform")
             
             policy_log_dict["policy_train/semi_s_perform"], \
             policy_log_dict["policy_train/semi_s_epi_len"], \
-            semi_s_traj  = eval_policy(semi_trainer.semi_s_actor, t, config.checkpoints_path+"/gif/semi_s", config.device, wandb, "semi_s_perform")
+            semi_s_traj  = eval_policy(semi_trainer.semi_s_actor, semi_trainer.total_it, config.checkpoints_path+"/gif/semi_s", config.device, wandb, "semi_s_perform")
             
             policy_log_dict["policy_train/semi_a_perform"], \
             policy_log_dict["policy_train/semi_a_epi_len"], \
-            semi_a_traj = eval_policy(semi_trainer.semi_a_actor, t, config.checkpoints_path+"/gif/semi_a", config.device, wandb, "semi_a_perform")
+            semi_a_traj = eval_policy(semi_trainer.semi_a_actor, semi_trainer.total_it, config.checkpoints_path+"/gif/semi_a", config.device, wandb, "semi_a_perform")
             
             policy_log_dict["policy_train/true_s_and_a_perform"], \
             policy_log_dict["policy_train/true_s_and_a_epi_len"], \
-            true_s_and_a_traj = eval_policy(semi_trainer.true_sa_actor, t, config.checkpoints_path+"/gif/true_s_and_a", config.device, wandb, "true_s_and_a_perform")
+            true_s_and_a_traj = eval_policy(semi_trainer.true_sa_actor, semi_trainer.total_it, config.checkpoints_path+"/gif/true_s_and_a", config.device, wandb, "true_s_and_a_perform")
             
             policy_log_dict["policy_train/bc_perform"], \
             policy_log_dict["policy_train/bc_epi_len"], \
-            bc_traj = eval_policy(semi_trainer.bc_actor, t, config.checkpoints_path+"/gif/bc", config.device, wandb, "bc_perform")
+            bc_traj = eval_policy(semi_trainer.bc_actor, semi_trainer.total_it, config.checkpoints_path+"/gif/bc", config.device, wandb, "bc_perform")
 
-            policy_log_dict["policy_step"] = t 
+            policy_log_dict["policy_step"] = semi_trainer.total_it
             wandb.log(policy_log_dict,)
             print("==============================")
 
@@ -1056,7 +1045,7 @@ def train(config: TrainConfig):
                            "selected_traj/" + "semi_s_and_a": wandb.Image(weights_dict["semi_s_and_a"]),
                            "selected_traj/" + "true_s_and_a": wandb.Image(weights_dict["true_s_and_a"]),
                            "selected_traj/" + "bc": wandb.Image(weights_dict["bc"]),
-                           "selected_traj_step" : t,
+                           "selected_traj_step" : semi_trainer.total_it,
                            },)
             
 
@@ -1079,7 +1068,7 @@ def train(config: TrainConfig):
                            "selected_expert_traj/" + "semi_s_or_a": wandb.Image(weights_dict["semi_s_or_a"]),
                            "selected_expert_traj/" + "semi_s_and_a": wandb.Image(weights_dict["semi_s_and_a"]),
                            "selected_expert_traj/" + "true_s_and_a": wandb.Image(weights_dict["true_s_and_a"]),
-                           "selected_expert_traj_step" : t,
+                           "selected_expert_traj_step" : semi_trainer.total_it,
                            },)
 
         t += 1
