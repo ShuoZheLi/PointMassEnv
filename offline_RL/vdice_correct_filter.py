@@ -947,8 +947,8 @@ def load_checkpoint(config):
     semi_trainer.load_state_dict(torch.load(config.load_model))
     return semi_trainer, dataset, expert_dataset, state_dim, action_dim, env, replay_buffer
 
-@pyrallis.wrap()
-def train(config: TrainConfig):
+
+def train():
 
     if config.load_model != "":
         semi_trainer, dataset, expert_dataset, state_dim, action_dim, env, replay_buffer = load_checkpoint(config)
