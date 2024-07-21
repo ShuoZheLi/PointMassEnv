@@ -565,14 +565,23 @@ class VDICE:
 
             "semi_sa_actor_and": self.semi_sa_actor_and.state_dict(),
             "semi_sa_actor_and_optimizer": self.semi_sa_actor_and_optimizer.state_dict(),
+            "semi_sa_actor_and_lr_schedule": self.semi_sa_actor_and_lr_schedule.state_dict(),
+
             "semi_sa_actor_or": self.semi_sa_actor_or.state_dict(),
             "semi_sa_actor_or_optimizer": self.semi_sa_actor_or_optimizer.state_dict(),
+            "semi_sa_actor_or_lr_schedule": self.semi_sa_actor_or_lr_schedule.state_dict(),
+
             "semi_s_actor": self.semi_s_actor.state_dict(),
             "semi_s_actor_optimizer": self.semi_s_actor_optimizer.state_dict(),
+            "semi_s_actor_lr_schedule": self.semi_a_actor_lr_schedule.state_dict(),
+
             "semi_a_actor": self.semi_a_actor.state_dict(),
             "semi_a_actor_optimizer": self.semi_a_actor_optimizer.state_dict(),
+            "semi_a_actor_lr_schedule": self.semi_a_actor_lr_schedule.state_dict(),
+            
             "true_sa_actor": self.true_sa_actor.state_dict(),
             "true_sa_actor_optimizer": self.true_sa_actor_optimizer.state_dict(),
+            "true_sa_actor_lr_schedule": self.true_sa_actor_lr_schedule.state_dict(),
 
             "total_it": self.total_it,
         }
@@ -592,16 +601,27 @@ class VDICE:
         self.q.load_state_dict(state_dict["q"])
         self.q_target.load_state_dict(state_dict["q_target"])
         self.q_optimizer.load_state_dict(state_dict["q_optimizer"])
+
         self.semi_sa_actor_and.load_state_dict(state_dict["semi_sa_actor_and"])
         self.semi_sa_actor_and_optimizer.load_state_dict(state_dict["semi_sa_actor_and_optimizer"])
+        self.semi_sa_actor_and_lr_schedule.load_state_dict(state_dict["semi_sa_actor_and_lr_schedule"])
+
         self.semi_sa_actor_or.load_state_dict(state_dict["semi_sa_actor_or"])
         self.semi_sa_actor_or_optimizer.load_state_dict(state_dict["semi_sa_actor_or_optimizer"])
+        self.semi_sa_actor_or_lr_schedule.load_state_dict(state_dict["semi_sa_actor_or_lr_schedule"])
+
         self.semi_s_actor.load_state_dict(state_dict["semi_s_actor"])
         self.semi_s_actor_optimizer.load_state_dict(state_dict["semi_s_actor_optimizer"])
+        self.semi_s_actor_lr_schedule.load_state_dict(state_dict["semi_s_actor_lr_schedule"])
+
         self.semi_a_actor.load_state_dict(state_dict["semi_a_actor"])
         self.semi_a_actor_optimizer.load_state_dict(state_dict["semi_a_actor_optimizer"])
+        self.semi_a_actor_lr_schedule.load_state_dict(state_dict["semi_a_actor_lr_schedule"])
+
         self.true_sa_actor.load_state_dict(state_dict["true_sa_actor"])
         self.true_sa_actor_optimizer.load_state_dict(state_dict["true_sa_actor_optimizer"])
+        self.true_sa_actor_lr_schedule.load_state_dict(state_dict["true_sa_actor_lr_schedule"])
+
         self.total_it = state_dict["total_it"]
 
     def get_weights(
