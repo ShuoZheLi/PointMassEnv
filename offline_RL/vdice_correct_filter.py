@@ -1049,7 +1049,7 @@ def train():
                     values = None
                     if key == "semi_s" or key == "semi_a" or key == "true_s_and_a":
                         values = locals()[key+"_state_value"]
-                    selected_img  = draw_traj(weights, temp_dataset, env, save_path = save_dir + "/" + str(t) + ".png", trajectories=locals()[key+"_traj"], values=values)
+                    selected_img  = draw_traj(weights, temp_dataset, env, save_path = save_dir + "/" + semi_trainer.total_it + ".png", trajectories=locals()[key+"_traj"], values=values)
                     weights_dict[key] = selected_img
                 
                 wandb.log({"selected_traj/" + "semi_s": wandb.Image(weights_dict["semi_s"]),
@@ -1073,7 +1073,7 @@ def train():
                 for key, weights in weights_dict.items():
                     save_dir = config.checkpoints_path + "/selected_expert_traj/" + key
                     os.makedirs(save_dir, exist_ok=True)
-                    selected_img  = draw_traj(weights, temp_expert_dataset, env, save_path = save_dir + "/" + str(t) + ".png")
+                    selected_img  = draw_traj(weights, temp_expert_dataset, env, save_path = save_dir + "/" + semi_trainer.total_it + ".png")
                     weights_dict[key] = selected_img
                 
                 wandb.log({"selected_expert_traj/" + "semi_s": wandb.Image(weights_dict["semi_s"]),
