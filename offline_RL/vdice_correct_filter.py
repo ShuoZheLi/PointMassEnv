@@ -96,6 +96,7 @@ class TrainConfig:
     reward_type: str = "sparse"
     percent_expert: float = 0
     discrete_action: bool = False
+    pretrain_steps: int = 10
     
 
     # def __post_init__(self):
@@ -982,7 +983,7 @@ def train():
         os.makedirs(save_dir, exist_ok=True)
         full_traj = draw_traj(weights, temp_dataset, env, save_path = save_dir + "/full.png")
         wandb.log({"selected_traj/" + "full_traj": wandb.Image(full_traj),
-                   "selected_traj_step" : semi_trainer.total_it,
+                   "selected_traj_step" : str(semi_trainer.total_it),
                    })
         
     while t < int(config.max_timesteps):
@@ -991,8 +992,8 @@ def train():
         batch = replay_buffer.sample(config.batch_size)
         batch = [b.to(config.device) for b in batch]
         semi_log_dict = semi_trainer.train(batch)
-        semi_log_dict["vdice_step"] = semi_trainer.total_it
-        semi_log_dict["value_step"] = semi_trainer.total_it
+        semi_log_dict["vdice_step"] = str(semi_trainer.total_it)
+        semi_log_dict["value_step"] = str(semi_trainer.total_it)
 
         wandb.log(semi_log_dict,)
 
@@ -1000,29 +1001,29 @@ def train():
             policy_log_dict = {}
             policy_log_dict["policy_train/semi_s_and_a_perform"], \
             policy_log_dict["policy_train/semi_s_and_a_epi_len"], \
-            semi_s_and_a_traj = eval_policy(semi_trainer.semi_sa_actor_and, semi_trainer.total_it, config.checkpoints_path+"/gif/semi_s_and_a", config.device, wandb, "semi_s_and_a_perform")
+            semi_s_and_a_traj = eval_policy(semi_trainer.semi_sa_actor_and, str(semi_trainer.total_it), config.checkpoints_path+"/gif/semi_s_and_a", config.device, wandb, "semi_s_and_a_perform")
             
             policy_log_dict["policy_train/semi_s_or_a_perform"], \
             policy_log_dict["policy_train/semi_s_or_a_epi_len"], \
-            semi_s_or_a_traj = eval_policy(semi_trainer.semi_sa_actor_or, semi_trainer.total_it, config.checkpoints_path+"/gif/semi_s_or_a", config.device, wandb, "semi_s_or_a_perform")
+            semi_s_or_a_traj = eval_policy(semi_trainer.semi_sa_actor_or, str(semi_trainer.total_it), config.checkpoints_path+"/gif/semi_s_or_a", config.device, wandb, "semi_s_or_a_perform")
             
             policy_log_dict["policy_train/semi_s_perform"], \
             policy_log_dict["policy_train/semi_s_epi_len"], \
-            semi_s_traj  = eval_policy(semi_trainer.semi_s_actor, semi_trainer.total_it, config.checkpoints_path+"/gif/semi_s", config.device, wandb, "semi_s_perform")
+            semi_s_traj  = eval_policy(semi_trainer.semi_s_actor, str(semi_trainer.total_it), config.checkpoints_path+"/gif/semi_s", config.device, wandb, "semi_s_perform")
             
             policy_log_dict["policy_train/semi_a_perform"], \
             policy_log_dict["policy_train/semi_a_epi_len"], \
-            semi_a_traj = eval_policy(semi_trainer.semi_a_actor, semi_trainer.total_it, config.checkpoints_path+"/gif/semi_a", config.device, wandb, "semi_a_perform")
+            semi_a_traj = eval_policy(semi_trainer.semi_a_actor, str(semi_trainer.total_it), config.checkpoints_path+"/gif/semi_a", config.device, wandb, "semi_a_perform")
             
             policy_log_dict["policy_train/true_s_and_a_perform"], \
             policy_log_dict["policy_train/true_s_and_a_epi_len"], \
-            true_s_and_a_traj = eval_policy(semi_trainer.true_sa_actor, semi_trainer.total_it, config.checkpoints_path+"/gif/true_s_and_a", config.device, wandb, "true_s_and_a_perform")
+            true_s_and_a_traj = eval_policy(semi_trainer.true_sa_actor, str(semi_trainer.total_it), config.checkpoints_path+"/gif/true_s_and_a", config.device, wandb, "true_s_and_a_perform")
             
             policy_log_dict["policy_train/bc_perform"], \
             policy_log_dict["policy_train/bc_epi_len"], \
-            bc_traj = eval_policy(semi_trainer.bc_actor, semi_trainer.total_it, config.checkpoints_path+"/gif/bc", config.device, wandb, "bc_perform")
+            bc_traj = eval_policy(semi_trainer.bc_actor, str(semi_trainer.total_it), config.checkpoints_path+"/gif/bc", config.device, wandb, "bc_perform")
 
-            policy_log_dict["policy_step"] = semi_trainer.total_it
+            policy_log_dict["policy_step"] = str(semi_trainer.total_it)
             wandb.log(policy_log_dict,)
             print("==============================")
 
@@ -1049,7 +1050,7 @@ def train():
                     values = None
                     if key == "semi_s" or key == "semi_a" or key == "true_s_and_a":
                         values = locals()[key+"_state_value"]
-                    selected_img  = draw_traj(weights, temp_dataset, env, save_path = save_dir + "/" + semi_trainer.total_it + ".png", trajectories=locals()[key+"_traj"], values=values)
+                    selected_img  = draw_traj(weights, temp_dataset, env, save_path = save_dir + "/" + str(semi_trainer.total_it) + ".png", trajectories=locals()[key+"_traj"], values=values)
                     weights_dict[key] = selected_img
                 
                 wandb.log({"selected_traj/" + "semi_s": wandb.Image(weights_dict["semi_s"]),
@@ -1058,7 +1059,7 @@ def train():
                            "selected_traj/" + "semi_s_and_a": wandb.Image(weights_dict["semi_s_and_a"]),
                            "selected_traj/" + "true_s_and_a": wandb.Image(weights_dict["true_s_and_a"]),
                            "selected_traj/" + "bc": wandb.Image(weights_dict["bc"]),
-                           "selected_traj_step" : semi_trainer.total_it,
+                           "selected_traj_step" : str(semi_trainer.total_it),
                            },)
             
 
@@ -1073,7 +1074,7 @@ def train():
                 for key, weights in weights_dict.items():
                     save_dir = config.checkpoints_path + "/selected_expert_traj/" + key
                     os.makedirs(save_dir, exist_ok=True)
-                    selected_img  = draw_traj(weights, temp_expert_dataset, env, save_path = save_dir + "/" + semi_trainer.total_it + ".png")
+                    selected_img  = draw_traj(weights, temp_expert_dataset, env, save_path = save_dir + "/" + str(semi_trainer.total_it) + ".png")
                     weights_dict[key] = selected_img
                 
                 wandb.log({"selected_expert_traj/" + "semi_s": wandb.Image(weights_dict["semi_s"]),
@@ -1081,7 +1082,7 @@ def train():
                            "selected_expert_traj/" + "semi_s_or_a": wandb.Image(weights_dict["semi_s_or_a"]),
                            "selected_expert_traj/" + "semi_s_and_a": wandb.Image(weights_dict["semi_s_and_a"]),
                            "selected_expert_traj/" + "true_s_and_a": wandb.Image(weights_dict["true_s_and_a"]),
-                           "selected_expert_traj_step" : semi_trainer.total_it,
+                           "selected_expert_traj_step" : str(semi_trainer.total_it),
                            },)
 
         t += 1
