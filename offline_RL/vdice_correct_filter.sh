@@ -4,7 +4,7 @@
 env_1="antmaze-umaze-v2"
 env_2="antmaze-umaze-v2"
 conda_env="corl_0"
-project="state_ratio"
+project="state_ratio_true_gradient"
 checkpoints_path_base="qds_constrainted_alt"
 alg="qds_constrainted_alt"
 
@@ -80,7 +80,7 @@ for normalize_reward in "${normalize_reward_values[@]}"; do
 
           # Start the experiment with the specified parameters
           tmux send-keys -t $session_name "CUDA_VISIBLE_DEVICES=$device \
-                                          python3 offline_RL/vdice_correct_filter.py \
+                                          python3 offline_RL/vdice_correct_filter_true_gradient.py \
                                           --env_name $env_name \
                                           --discrete_action $discrete_action \
                                           --percent_expert $percent_expert \
