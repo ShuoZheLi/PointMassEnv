@@ -4,8 +4,9 @@
 env_1="antmaze-umaze-v2"
 env_2="antmaze-umaze-v2"
 conda_env="corl_0"
-project="2_mature_v_q_goal_1_wall_n10"
-checkpoints_path_base="2_mature_v_q_goal_1_wall_n10"
+project="state_ratio"
+checkpoints_path_base="qds_constrainted_alt"
+alg="qds_constrainted_alt"
 
 env_name="EmptyRoom"
 discrete_action="True"
@@ -20,7 +21,7 @@ discount_values=(0.99)
 # semi_dice_lambda_values=(0.7)
 # true_dice_alpha_values=(0.5)
 
-semi_dice_lambda_values=(0.5)
+semi_dice_lambda_values=(0.6)
 true_dice_alpha_values=(0.25)
 
 percent_expert="0"
@@ -34,7 +35,7 @@ hidden_dim="256"
 
 seed=(19990526)
 # GPUS=(2 3 1)
-GPUS=(3)
+GPUS=(1)
 
 # Initialize an experiment counter
 experiment_counter=0
@@ -61,6 +62,8 @@ for normalize_reward in "${normalize_reward_values[@]}"; do
           session_name="${session_name}_batch_size_${batch_size}"
           # append hidden_dim
           session_name="${session_name}_hidden_dim_${hidden_dim}"
+          # append alg
+          session_name="${session_name}_alg_${alg}"
 
           session_name="${session_name//./_}" # Replace dots with underscores
 
@@ -94,6 +97,7 @@ for normalize_reward in "${normalize_reward_values[@]}"; do
                                           --seed $current_seed \
                                           --max_timesteps 1000000 \
                                           --project $project \
+                                          --alg $alg \
                                           --checkpoints_path $checkpoints_path" C-m
 
           # Increment the experiment counter

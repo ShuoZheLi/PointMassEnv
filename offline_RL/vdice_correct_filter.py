@@ -24,7 +24,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from offline_RL.utils import TwinQ, ValueFunction, GaussianPolicy, DeterministicPolicy, \
                     ReplayBuffer, MLP, TwinV, soft_update, set_seed, compute_mean_std, \
                     eval_actor, return_reward_range, modify_reward, normalize_states, \
-                    wrap_env, BcLearning, qlearning_dataset
+                    wrap_env, BcLearning, qlearning_dataset, TwinQV2
 
 from PointMassEnv import PointMassEnv, WALLS
 import imageio
@@ -96,7 +96,8 @@ class TrainConfig:
     reward_type: str = "sparse"
     percent_expert: float = 0
     discrete_action: bool = False
-    pretrain_steps: int = 10
+    pretrain_steps: int = 3e5
+    # pretrain_steps: int = 10
     
 
     # def __post_init__(self):
@@ -143,6 +144,9 @@ def frenchel_dual(name, x):
         return x * omega_star - (omega_star - 1)**2
     else:
         raise ValueError("Unknown policy f name")
+    
+def frenchel_dual_q(name, x):
+    return torch.max(x + x**2 / 4, torch.zeros_like(x))
 
 def frenchel_dual_prime(name, x):
     if name == "Smoothed_square_chi":
@@ -174,6 +178,8 @@ class VDICE:
         semi_v_optimizer: torch.optim.Optimizer,
         q_network: nn.Module,
         q_optimizer: torch.optim.Optimizer,
+        semi_q_network: nn.Module,
+        semi_q_optimizer: torch.optim.Optimizer,
         mu_network: nn.Module,
         mu_optimizer: torch.optim.Optimizer,
         U_network: nn.Module,
@@ -186,6 +192,7 @@ class VDICE:
         discount: float = 0.99,
         tau: float = 0.005,
         device: str = "cpu",
+        config: TrainConfig = None,
     ):
         self.max_action = max_action
         self.true_v = true_v_network
@@ -193,7 +200,12 @@ class VDICE:
         self.q = q_network
         self.q_target = copy.deepcopy(self.q).requires_grad_(False).to(device)
         self.mu = mu_network
+        self.mu_target = copy.deepcopy(self.mu).requires_grad_(False).to(device)
         self.U = U_network
+
+        self.semi_q = semi_q_network
+        self.semi_q_target = copy.deepcopy(self.semi_q).requires_grad_(False).to(device)
+        self.semi_q_optimizer = semi_q_optimizer
         
         self.true_v_optimizer = true_v_optimizer
         self.semi_v_optimizer = semi_v_optimizer
@@ -234,6 +246,7 @@ class VDICE:
 
         self.total_it = 0
         self.device = device
+        self.config = config
 
     def semidice_result_no_vtarget(self, dataset):
 
@@ -388,24 +401,210 @@ class VDICE:
         next_observations: torch.Tensor,
         terminals: torch.Tensor,
         init_observations: torch.Tensor,
+        actions,
         log_dict: Dict,
     ):
-        mu = self.mu(observations)
-        mu_next = self.mu(next_observations)
-        # TODO: where is the reward??
+        with torch.no_grad():
+            mu_next = self.mu_target(next_observations)
+            target_q = self.q_target(observations, actions)
+            semi_v = self.semi_v(observations)
+            adv = target_q - semi_v
+            semi_a_weight = f_prime_inverse(self.f_name, adv)
+
+        mu_init = self.mu.both(init_observations)
+        mu = self.mu.both(observations)
+        
         mu_residual = (1.0 - terminals.float()) * self.discount * mu_next - mu
-        # TODO: why frenchel_dual?? !!!!!!!!!!!!!!!!!!!!!!!!!!! frenchel_dual NOOOOOOOOO
-        mu_dual_loss = torch.mean(s_a_weight * mu_residual)
+        mu_dual_loss = torch.mean(frenchel_dual(self.f_name, semi_a_weight * mu_residual))
         # TODO: why is there a discount factor here?
-        mu_linear_loss = (1 - self.discount) * torch.mean(self.mu(init_observations))
+        mu_linear_loss = (1 - self.discount) * torch.mean(mu_init)
         mu_loss = mu_linear_loss + mu_dual_loss
 
         self.mu_optimizer.zero_grad()
         mu_loss.backward()
         self.mu_optimizer.step()
 
+        soft_update(self.mu_target, self.mu, self.tau)
+
         log_dict["vdice_loss/mu_loss"] = mu_loss.item()
         log_dict["value_train/mu_value"] = mu.mean().item()
+
+    def _update_mu_alt(
+        self,
+        s_a_weight: torch.Tensor,
+        observations: torch.Tensor,
+        next_observations: torch.Tensor,
+        terminals: torch.Tensor,
+        init_observations: torch.Tensor,
+        actions,
+        log_dict: Dict,
+    ):
+        with torch.no_grad():
+            mu_next = self.mu_target(next_observations)
+            target_q = self.q_target(observations, actions)
+            semi_v = self.semi_v(observations)
+            adv = target_q - semi_v
+            semi_a_weight = f_prime_inverse(self.f_name, adv)
+
+        # mu_init = self.mu.both(init_observations)
+        mu = self.mu.both(observations)
+        
+        mu_residual = (1.0 - terminals.float()) * self.discount * mu_next - mu
+        mu_dual_loss = torch.mean(frenchel_dual(self.f_name, semi_a_weight * mu_residual))
+        # TODO: why is there a discount factor here?
+        mu_linear_loss = - mu_residual.mean()
+        mu_loss = mu_linear_loss + mu_dual_loss
+
+        self.mu_optimizer.zero_grad()
+        mu_loss.backward()
+        self.mu_optimizer.step()
+
+        soft_update(self.mu_target, self.mu, self.tau)
+
+        log_dict["vdice_loss/mu_loss"] = mu_loss.item()
+        log_dict["value_train/mu_value"] = mu.mean().item()
+        
+    def _update_vds(
+        self,
+        s_a_weight: torch.Tensor,
+        observations: torch.Tensor,
+        next_observations: torch.Tensor,
+        terminals: torch.Tensor,
+        init_observations: torch.Tensor,
+        actions,
+        rewards,
+        log_dict: Dict,
+    ):
+        with torch.no_grad():
+            mu_next = self.mu_target(next_observations)
+            target_q = self.q_target(observations, actions)
+            semi_v = self.semi_v(observations)
+            adv = target_q - semi_v
+            semi_a_weight = f_prime_inverse(self.f_name, adv)
+
+        mu_init = self.mu.both(init_observations)
+        mu = self.mu.both(observations)
+        
+        mu_residual = rewards + (1.0 - terminals.float()) * self.discount * mu_next - mu
+        mu_dual_loss = torch.mean(frenchel_dual(self.f_name, semi_a_weight * mu_residual))
+        # TODO: why is there a discount factor here?
+        mu_linear_loss = (1 - self.discount) * torch.mean(mu_init)
+        mu_loss = mu_linear_loss + mu_dual_loss
+
+        self.mu_optimizer.zero_grad()
+        mu_loss.backward()
+        self.mu_optimizer.step()
+
+        soft_update(self.mu_target, self.mu, self.tau)
+
+        log_dict["vdice_loss/mu_loss"] = mu_loss.item()
+        log_dict["value_train/mu_value"] = mu.mean().item()
+
+    def _update_vds_alt(
+        self,
+        s_a_weight: torch.Tensor,
+        observations: torch.Tensor,
+        next_observations: torch.Tensor,
+        terminals: torch.Tensor,
+        init_observations: torch.Tensor,
+        actions,
+        rewards,
+        log_dict: Dict,
+    ):
+        with torch.no_grad():
+            mu_next = self.mu_target(next_observations)
+            target_q = self.q_target(observations, actions)
+            semi_v = self.semi_v(observations)
+            adv = target_q - semi_v
+            semi_a_weight = f_prime_inverse(self.f_name, adv)
+
+        # mu_init = self.mu.both(init_observations)
+        mu = self.mu.both(observations)
+        
+        mu_residual = rewards + (1.0 - terminals.float()) * self.discount * mu_next - mu
+        mu_dual_loss = torch.mean(frenchel_dual(self.f_name, semi_a_weight * mu_residual))
+        # TODO: why is there a discount factor here?
+        mu_linear_loss = -((1.0 - terminals.float()) * self.discount * mu_next - mu).mean()
+        mu_loss = mu_linear_loss + mu_dual_loss
+
+        self.mu_optimizer.zero_grad()
+        mu_loss.backward()
+        self.mu_optimizer.step()
+
+        soft_update(self.mu_target, self.mu, self.tau)
+
+        log_dict["vdice_loss/mu_loss"] = mu_loss.item()
+        log_dict["value_train/mu_value"] = mu.mean().item()
+    
+    def _update_semi_q(
+        self,
+        observations: torch.Tensor,
+        actions: torch.Tensor,
+        rewards: torch.Tensor,
+        next_observations: torch.Tensor,
+        dones: torch.Tensor,
+        init_observations: torch.Tensor,
+        log_dict: Dict,
+    ):
+        with torch.no_grad():
+            init_a = self.semi_s_actor(init_observations).mean
+            next_a = self.semi_s_actor(next_observations).mean
+            next_q = self.semi_q_target(next_observations, next_a)
+            target_q = self.q_target(observations, actions)
+            semi_v = self.semi_v(observations)
+            adv = target_q - semi_v
+            semi_a_weight = f_prime_inverse(self.f_name, adv)
+
+        q = self.semi_q.both(observations, actions)
+        q_init = self.semi_q.both(init_observations, init_a)
+        q_residual = rewards + (1.0 - dones.float()) * self.discount * next_q - q
+        q_dual_loss = torch.mean(frenchel_dual_q(self.f_name, semi_a_weight * q_residual))
+        q_linear_loss = (1 - self.discount) * torch.mean(q_init)
+        q_loss = q_linear_loss + q_dual_loss
+
+        log_dict["vdice_loss/semi_q_loss"] = q_loss.item()
+        log_dict["value_train/semi_q_value"] = q.mean().item()
+        self.semi_q_optimizer.zero_grad()
+        q_loss.backward()
+        self.semi_q_optimizer.step()
+
+        # Update target Q network
+        soft_update(self.semi_q_target, self.semi_q, self.tau)
+
+    def _update_semi_q_alt(
+        self,
+        observations: torch.Tensor,
+        actions: torch.Tensor,
+        rewards: torch.Tensor,
+        next_observations: torch.Tensor,
+        dones: torch.Tensor,
+        init_observations: torch.Tensor,
+        log_dict: Dict,
+    ):
+        with torch.no_grad():
+            # init_a = self.semi_a_actor(init_observations).mean
+            next_a = self.semi_s_actor(next_observations).mean
+            next_q = self.semi_q_target(next_observations, next_a)
+            target_q = self.q_target(observations, actions)
+            semi_v = self.semi_v(observations)
+            adv = target_q - semi_v
+            semi_a_weight = f_prime_inverse(self.f_name, adv)
+
+        q = self.semi_q.both(observations, actions)
+        # q_init = self.semi_q.both(init_observations, init_a)
+        q_residual = rewards + (1.0 - dones.float()) * self.discount * next_q - q
+        q_dual_loss = torch.mean(frenchel_dual_q(self.f_name, semi_a_weight * q_residual))
+        q_linear_loss = -((1.0 - dones.float()) * self.discount * next_q - q).mean()
+        q_loss = q_linear_loss + q_dual_loss
+
+        log_dict["vdice_loss/semi_q_loss"] = q_loss.item()
+        log_dict["value_train/semi_q_value"] = q.mean().item()
+        self.semi_q_optimizer.zero_grad()
+        q_loss.backward()
+        self.semi_q_optimizer.step()
+
+        # Update target Q network
+        soft_update(self.semi_q_target, self.semi_q, self.tau)
 
     def _update_policy(
         self,
@@ -430,7 +629,7 @@ class VDICE:
 
         
 
-        if self.total_it >= 3e5:
+        if self.total_it >= self.config.pretrain_steps:
             policy_out = self.semi_s_actor(observations)
             bc_losses = -policy_out.log_prob(actions).sum(-1, keepdim=False)
             policy_loss = torch.mean(semi_s_weight * bc_losses)
@@ -459,14 +658,19 @@ class VDICE:
             self.semi_sa_actor_or_lr_schedule.step()
             log_dict["vdice_loss/semi_sa_or_policy_loss"] = policy_loss.item()
 
-        policy_out = self.semi_a_actor(observations)
-        bc_losses = -policy_out.log_prob(actions).sum(-1, keepdim=False)
-        policy_loss = torch.mean(semi_a_weight * bc_losses)
-        self.semi_a_actor_optimizer.zero_grad()
-        policy_loss.backward()
-        self.semi_a_actor_optimizer.step()
-        self.semi_a_actor_lr_schedule.step()
-        log_dict["vdice_loss/semi_a_policy_loss"] = policy_loss.item()
+        else:
+            policy_out = self.semi_a_actor(observations)
+            bc_losses = -policy_out.log_prob(actions).sum(-1, keepdim=False)
+            policy_loss = torch.mean(semi_a_weight * bc_losses)
+            self.semi_a_actor_optimizer.zero_grad()
+            policy_loss.backward()
+            self.semi_a_actor_optimizer.step()
+            self.semi_a_actor_lr_schedule.step()
+            log_dict["vdice_loss/semi_a_policy_loss"] = policy_loss.item()
+
+            self.semi_s_actor = self.semi_a_actor
+            self.semi_s_actor_optimizer = self.semi_a_actor_optimizer
+            self.semi_s_actor_lr_schedule = self.semi_a_actor_lr_schedule
 
         policy_out = self.true_sa_actor(observations)
         bc_losses = -policy_out.log_prob(actions).sum(-1, keepdim=False)
@@ -522,22 +726,74 @@ class VDICE:
                        dones, 
                        log_dict)
         
-        if self.total_it >= 3e5:
+        if self.total_it >= self.config.pretrain_steps:
             
             # Update U function
-            s_a_weight = self._update_U(semi_residual, 
-                                        observations, 
-                                        next_observations, 
-                                        dones, 
-                                        log_dict)
+            # s_a_weight = self._update_U(semi_residual, 
+            #                             observations, 
+            #                             next_observations, 
+            #                             dones, 
+            #                             log_dict)
 
             # Update Mu function
-            self._update_mu(s_a_weight, 
-                            observations, 
-                            next_observations, 
-                            dones, 
-                            init_observations, 
-                            log_dict)
+            # self._update_mu(s_a_weight, 
+            #                 observations, 
+            #                 next_observations, 
+            #                 dones, 
+            #                 init_observations, 
+            #                 log_dict)
+
+            # self._update_mu(None, 
+            #                 observations, 
+            #                 next_observations, 
+            #                 dones, 
+            #                 init_observations, 
+            #                 actions,
+            #                 log_dict)
+
+            # self._update_mu_alt(None, 
+            #                 observations, 
+            #                 next_observations, 
+            #                 dones, 
+            #                 init_observations, 
+            #                 actions,
+            #                 log_dict)
+
+            # self._update_vds(None,
+            #                 observations,
+            #                 next_observations,
+            #                 dones,
+            #                 init_observations,
+            #                 actions,
+            #                 rewards,
+            #                 log_dict)
+
+            # self._update_vds_alt(None,
+            #                 observations,
+            #                 next_observations,
+            #                 dones,
+            #                 init_observations,
+            #                 actions,
+            #                 rewards,
+            #                 log_dict)
+            
+            # self._update_semi_q(
+            #                 observations,
+            #                 actions,
+            #                 rewards,
+            #                 next_observations,
+            #                 dones,
+            #                 init_observations,
+            #                 log_dict,)
+            
+            self._update_semi_q_alt(
+                            observations,
+                            actions,
+                            rewards,
+                            next_observations,
+                            dones,
+                            init_observations,
+                            log_dict,)
 
             
         # Update actor
@@ -557,6 +813,7 @@ class VDICE:
             "true_v": self.true_v.state_dict(),
             "true_v_optimizer": self.true_v_optimizer.state_dict(),
             "mu": self.mu.state_dict(),
+            "mu_target": self.mu_target.state_dict(),
             "mu_optimizer": self.mu_optimizer.state_dict(),
             "U": self.U.state_dict(),
             "U_optimizer": self.U_optimizer.state_dict(),
@@ -596,6 +853,7 @@ class VDICE:
         self.true_v.load_state_dict(state_dict["true_v"])
         self.true_v_optimizer.load_state_dict(state_dict["true_v_optimizer"])
         self.mu.load_state_dict(state_dict["mu"])
+        self.mu_target.load_state_dict(state_dict["mu_target"])
         self.mu_optimizer.load_state_dict(state_dict["mu_optimizer"])
         self.U.load_state_dict(state_dict["U"])
         self.U_optimizer.load_state_dict(state_dict["U_optimizer"])
@@ -638,8 +896,24 @@ class VDICE:
             semi_v = self.semi_v(observations)
             adv = target_q - semi_v
             semi_a_weight = f_prime_inverse(self.f_name, adv)
-            u = self.U(observations)
-            semi_s_weight = f_prime_inverse(self.f_name, u)
+            # u = self.U(observations)
+            # semi_s_weight = f_prime_inverse(self.f_name, u)
+
+            # mu_next = self.mu_target(next_observations)
+            # mu = self.mu(observations)
+            # mu_residual = (1.0 - terminals.float()) * self.discount * mu_next - mu
+            # semi_s_weight = f_prime_inverse(self.f_name, semi_a_weight * mu_residual)
+
+            # mu_next = self.mu_target(next_observations)
+            # mu = self.mu(observations)
+            # mu_residual = rewards + (1.0 - terminals.float()) * self.discount * mu_next - mu
+            # semi_s_weight = f_prime_inverse(self.f_name, semi_a_weight * mu_residual)
+
+            semi_target_q = self.semi_q_target(next_observations, self.semi_s_actor(next_observations).mean)
+            semi_q = self.semi_q(observations, actions)
+            semi_q_residual = rewards + (1.0 - terminals.float()) * self.discount * semi_target_q - semi_q
+            semi_s_weight = f_prime_inverse(self.f_name, semi_a_weight * semi_q_residual)
+
 
             true_v = self.true_v(observations)
             true_v_next = self.true_v(next_observations)
@@ -683,7 +957,8 @@ class VDICE:
                 true_state_value = true_state_value.cpu().numpy()
                 mu_state_value = mu_state_value.cpu().numpy()
 
-        return state_value, action_state_value, true_state_value, mu_state_value
+        # return state_value, action_state_value, true_state_value, mu_state_value
+        return mu_state_value, action_state_value, true_state_value, mu_state_value
 
 def trainer_init(config: TrainConfig, env):
     state_dim = env.observation_space.shape[0]
@@ -717,8 +992,11 @@ def trainer_init(config: TrainConfig, env):
     true_v_network = ValueFunction(state_dim, layernorm=config.layernorm, hidden_dim=config.hidden_dim).to(config.device)
     semi_v_network = ValueFunction(state_dim, layernorm=config.layernorm, hidden_dim=config.hidden_dim).to(config.device)
     q_network = TwinQ(state_dim, action_dim, layernorm=config.layernorm, hidden_dim=config.hidden_dim).to(config.device)
-    mu_network = ValueFunction(state_dim, layernorm=config.layernorm, hidden_dim=config.hidden_dim).to(config.device)
+    # mu_network = TwinV(state_dim, layernorm=config.layernorm, hidden_dim=config.hidden_dim).to(config.device)
+    mu_network = TwinV(state_dim, hidden_dim=config.hidden_dim).to(config.device)
     U_network = ValueFunction(state_dim, layernorm=config.layernorm, hidden_dim=config.hidden_dim).to(config.device)
+
+    semi_q_network = TwinQV2(state_dim, action_dim, layernorm=config.layernorm, hidden_dim=config.hidden_dim).to(config.device)
 
     actor_optimizer = torch.optim.Adam(actor.parameters(), lr=config.actor_lr)
     true_v_optimizer = torch.optim.Adam(true_v_network.parameters(), lr=config.vf_lr)
@@ -726,6 +1004,7 @@ def trainer_init(config: TrainConfig, env):
     q_optimizer = torch.optim.Adam(q_network.parameters(), lr=config.vf_lr)
     mu_optimizer = torch.optim.Adam(mu_network.parameters(), lr=config.vf_lr)
     U_optimizer = torch.optim.Adam(U_network.parameters(), lr=config.vf_lr)
+    semi_q_optimizer = torch.optim.Adam(semi_q_network.parameters(), lr=config.vf_lr)
 
     kwargs = {
         "max_action": max_action,
@@ -739,6 +1018,8 @@ def trainer_init(config: TrainConfig, env):
         "q_optimizer": q_optimizer,
         "mu_network": mu_network,
         "mu_optimizer": mu_optimizer,
+        "semi_q_network": semi_q_network,
+        "semi_q_optimizer": semi_q_optimizer,
         "U_network": U_network,
         "U_optimizer": U_optimizer,
         "discount": config.discount,
@@ -749,6 +1030,7 @@ def trainer_init(config: TrainConfig, env):
         "semi_dice_lambda": config.semi_dice_lambda,
         "true_dice_alpha": config.true_dice_alpha,
         "max_steps": config.max_timesteps,
+        "config": config,
     }
 
     print("---------------------------------------")
@@ -983,7 +1265,7 @@ def train():
         os.makedirs(save_dir, exist_ok=True)
         full_traj = draw_traj(weights, temp_dataset, env, save_path = save_dir + "/full.png")
         wandb.log({"selected_traj/" + "full_traj": wandb.Image(full_traj),
-                   "selected_traj_step" : str(semi_trainer.total_it),
+                   "selected_traj_step" : int(semi_trainer.total_it),
                    })
         
     while t < int(config.max_timesteps):
@@ -992,8 +1274,8 @@ def train():
         batch = replay_buffer.sample(config.batch_size)
         batch = [b.to(config.device) for b in batch]
         semi_log_dict = semi_trainer.train(batch)
-        semi_log_dict["vdice_step"] = str(semi_trainer.total_it)
-        semi_log_dict["value_step"] = str(semi_trainer.total_it)
+        semi_log_dict["vdice_step"] = int(semi_trainer.total_it)
+        semi_log_dict["value_step"] = int(semi_trainer.total_it)
 
         wandb.log(semi_log_dict,)
 
@@ -1023,7 +1305,7 @@ def train():
             policy_log_dict["policy_train/bc_epi_len"], \
             bc_traj = eval_policy(semi_trainer.bc_actor, str(semi_trainer.total_it), config.checkpoints_path+"/gif/bc", config.device, wandb, "bc_perform")
 
-            policy_log_dict["policy_step"] = str(semi_trainer.total_it)
+            policy_log_dict["policy_step"] = int(semi_trainer.total_it)
             wandb.log(policy_log_dict,)
             print("==============================")
 
@@ -1059,7 +1341,7 @@ def train():
                            "selected_traj/" + "semi_s_and_a": wandb.Image(weights_dict["semi_s_and_a"]),
                            "selected_traj/" + "true_s_and_a": wandb.Image(weights_dict["true_s_and_a"]),
                            "selected_traj/" + "bc": wandb.Image(weights_dict["bc"]),
-                           "selected_traj_step" : str(semi_trainer.total_it),
+                           "selected_traj_step" : int(semi_trainer.total_it),
                            },)
             
 
@@ -1082,7 +1364,7 @@ def train():
                            "selected_expert_traj/" + "semi_s_or_a": wandb.Image(weights_dict["semi_s_or_a"]),
                            "selected_expert_traj/" + "semi_s_and_a": wandb.Image(weights_dict["semi_s_and_a"]),
                            "selected_expert_traj/" + "true_s_and_a": wandb.Image(weights_dict["true_s_and_a"]),
-                           "selected_expert_traj_step" : str(semi_trainer.total_it),
+                           "selected_expert_traj_step" : int(semi_trainer.total_it),
                            },)
 
         t += 1
