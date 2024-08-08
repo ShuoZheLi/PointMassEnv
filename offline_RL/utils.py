@@ -379,30 +379,29 @@ class TwinQ(nn.Module):
         self, state: torch.Tensor, action: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         sa = torch.cat([state, action], 1)
-        return self.q1(sa), self.q2(sa)
+        return torch.stack([self.q1(sa), self.q2(sa)], dim=0)
 
     def forward(self, state: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
-        return torch.min(*self.both(state, action))
+        return torch.min(self.both(state, action), dim=0)[0]
     
-class TwinQV2(nn.Module):
+class SingleQ(nn.Module):
     def __init__(
         self, state_dim: int, action_dim: int, hidden_dim: int = 256, n_hidden: int = 2, layernorm: bool = False
     ):
         super().__init__()
         dims = [state_dim + action_dim, *([hidden_dim] * n_hidden), 1]
         self.q1 = MLP(dims, squeeze_output=True, layernorm=layernorm)
-        self.q2 = MLP(dims, squeeze_output=True, layernorm=layernorm)
+        # self.q2 = MLP(dims, squeeze_output=True, layernorm=layernorm)
 
-    def both(
-        self, state: torch.Tensor, action: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        sa = torch.cat([state, action], 1)
-        # return self.q1(sa), self.q2(sa)
-        return torch.stack([self.q1(sa), self.q2(sa)], dim=0)
+    # def both(
+    #     self, state: torch.Tensor, action: torch.Tensor
+    # ) -> Tuple[torch.Tensor, torch.Tensor]:
+    #     sa = torch.cat([state, action], 1)
+    #     return self.q1(sa), self.q2(sa)
 
     def forward(self, state: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
-        # return torch.min(*self.both(state, action))
-        return torch.min(self.both(state, action), dim=0)[0]
+        sa = torch.cat([state, action], 1)
+        return self.q1(sa)
     
 
 class BcLearning:
