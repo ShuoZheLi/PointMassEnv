@@ -457,32 +457,25 @@ class VDICE:
         init_observations: torch.Tensor,
         actions_list: list,
         next_states_list: list,
+        dones_list: list,
         log_dict: Dict,
     ):
         with torch.no_grad():
-            target_q_list = []
-            semi_v_list = []
-            adv_list = []
-            semi_a_weight_list = []
-            mu_list = []
-            mu_next_list = []
-            mu_residual_list = []
             semi_a_weighted_residual_list = []
             
             for i in range(observations.shape[0]):
-                target_q_list.append(self.q_target(observations[i].repeat(actions_list[i].shape[0], 1), actions_list[i]))
-                semi_v_list.append(self.semi_v(observations[i].repeat(actions_list[i].shape[0], 1)))
-                adv_list.append(target_q_list[-1] - semi_v_list[-1])
-                semi_a_weight_list.append(f_prime_inverse(self.f_name, adv_list[-1]))
+                target_q = self.q_target(observations[i].repeat(actions_list[i].shape[0], 1), actions_list[i])
+                semi_v = self.semi_v(observations[i].repeat(actions_list[i].shape[0], 1))
+                adv = target_q - semi_v
+                semi_a_weight = f_prime_inverse(self.f_name, adv)
 
-                mu_list.append(self.mu(observations[i].repeat(next_states_list[i].shape[0], 1)))
-                mu_next_list.append(self.mu(next_states_list[i]))
-                mu_residual_list.append((1.0 - terminals[i]) * self.discount * mu_next_list[-1] - mu_list[-1])
+                mu = self.mu(observations[i].repeat(next_states_list[i].shape[0], 1))
+                mu_next = self.mu(next_states_list[i])
+                mu_residual = (1.0 - torch.squeeze(dones_list[i], dim=1)) * self.discount * mu_next - mu
 
-                
-                semi_a_weighted_residual_list.append(mu_residual_list[-1] * semi_a_weight_list[-1])
+                semi_a_weighted_residual_list.append(mu_residual * semi_a_weight)
                 semi_a_weighted_residual_list[-1] = semi_a_weighted_residual_list[-1].mean()
-                semi_a_weighted_residual_list[-1] = frenchel_dual(self.f_name, semi_a_weighted_residual_list[-1])
+                semi_a_weighted_residual_list[-1] = self.semi_q_alpha * frenchel_dual(self.f_name, semi_a_weighted_residual_list[-1] / self.semi_q_alpha)
             
            
         mu_dual_loss = torch.mean(torch.tensor(semi_a_weighted_residual_list, device=self.device, dtype=torch.float32))
@@ -588,6 +581,7 @@ class VDICE:
             dones,
             actions_list,
             next_states_list,
+            dones_list,
         ) = batch
         log_dict = {}
         flags = torch.ones_like(rewards)
@@ -619,16 +613,7 @@ class VDICE:
         # if self.total_it == 600001:
         #     self.semi_q = TwinQ(2, 2, layernorm=False, hidden_dim=256).to(self.device)
         #     self.semi_q_optimizer = torch.optim.Adam(self.semi_q.parameters(), lr=3e-4)
-        
 
-        self._update_mu(observations,
-                            actions,
-                            next_observations, 
-                            dones, 
-                            init_observations,
-                            actions_list,
-                            next_states_list,
-                            log_dict)
 
         if self.total_it >= 3e5:
             
@@ -647,6 +632,7 @@ class VDICE:
                             init_observations,
                             actions_list,
                             next_states_list,
+                            dones_list,
                             log_dict)
 
 
@@ -763,17 +749,11 @@ class VDICE:
             semi_v = self.semi_v(observations)
             adv = target_q - semi_v
             semi_a_weight = f_prime_inverse(self.f_name, adv)
-            # u = self.U(observations)
-            # semi_s_weight = f_prime_inverse(self.f_name, u)
-            next_a = self.semi_a_actor(next_observations).mean
-            next_q = self.semi_q(next_observations, next_a)
-            targets = (1.0 - terminals.float()) * self.discount * next_q
-            semi_q = self.semi_q(observations, actions)
-            adv = targets - semi_q
-            # adv = semi_q - targets
-            # semi_s_weight = f_prime_inverse(self.f_name, adv)
-            semi_s_weight = frenchel_dual_q_prime_inverse(self.f_name, adv)
-            # semi_s_weight = f_prime_inverse(self.f_name, semi_a_weight * adv)
+            
+            mu = self.mu(observations)
+            mu_next = self.mu(next_observations)
+            mu_residual = (1.0 - terminals.float()) * self.discount * mu_next - mu
+            semi_s_weight = f_prime_inverse(self.f_name, semi_a_weight * mu_residual)
 
 
 

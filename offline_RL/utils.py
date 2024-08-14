@@ -169,16 +169,56 @@ class ReplayBuffer:
 
         print(f"Dataset size: {n_transitions}")
 
-    def sample(self, batch_size: int) -> TensorBatch:
+        # {state : action} dictionary
+        self._state_action_dict = {}
+        # {state, action : next_state} dictionary
+        self._state_action_next_state_dict = {}
+        # {state, action, next_state : done} dictionary
+        self._state_action_next_state_done_dict = {}
+        for i in range(n_transitions):
+            if tuple(self._states[i].tolist()) in self._state_action_dict:
+                self._state_action_dict[tuple(self._states[i].tolist())].append(data["actions"][i])
+            else:
+                self._state_action_dict[tuple(self._states[i].tolist())] = [data["actions"][i]]
+
+            if tuple(self._states[i].tolist() + self._actions[i].tolist()) not in self._state_action_next_state_dict:
+            #     self._state_action_next_state_dict[tuple(self._states[i].tolist() + self._actions[i].tolist())].append(data["next_observations"][i])
+            # else:
+                self._state_action_next_state_dict[tuple(self._states[i].tolist() + self._actions[i].tolist())] = [data["next_observations"][i]]
+            
+            if tuple(self._states[i].tolist() + self._actions[i].tolist() + self._next_states[i].tolist()) not in self._state_action_next_state_done_dict:
+                self._state_action_next_state_done_dict[tuple(self._states[i].tolist() + self._actions[i].tolist() + self._next_states[i].tolist())] = [data["terminals"][i]]
+
+    def sample(self, batch_size: int, all_actions: bool) -> TensorBatch:
         indices = np.random.randint(0, min(self._size, self._pointer), size=batch_size)
         states = self._states[indices]
         actions = self._actions[indices]
         rewards = self._rewards[indices]
         next_states = self._next_states[indices]
         dones = self._dones[indices]
+        
+        if all_actions:
+            actions_list = []
+            next_states_list = []
+            dones_list = []
+            for i in indices:
+                actions_list.append(self._to_tensor(self._state_action_dict[tuple(self._states[i].tolist())]))
+                next_states_after_action = []
+                dones_after_action = []
+                for action in self._state_action_dict[tuple(self._states[i].tolist())]:
+                    next_states_after_action_e = self._state_action_next_state_dict[tuple(self._states[i].tolist() + action.tolist())]
+                    next_states_after_action.append(next_states_after_action_e)
+                    dones_after_action.append(self._state_action_next_state_done_dict[tuple(self._states[i].tolist() + action.tolist() + next_states_after_action_e[0].tolist())])
+                
+                next_states_list.append(self._to_tensor(next_states_after_action))
+                dones_list.append(self._to_tensor(dones_after_action))
+            return [states, actions, rewards, next_states, dones, actions_list, next_states_list, dones_list]
+        else:
+            return [states, actions, rewards, next_states, dones]
+        
         # experts = self._experts[indices]
         # return [states, actions, rewards, next_states, dones, experts]
-        return [states, actions, rewards, next_states, dones,]
+        
 
     def add_transition(self):
         # Use this method to add new data into the replay buffer during fine-tuning.
