@@ -149,47 +149,120 @@ class ReplayBuffer:
     def _to_tensor(self, data: np.ndarray) -> torch.Tensor:
         return torch.tensor(data, dtype=torch.float32, device=self._device)
 
-    # Loads data in d4rl format, i.e. from Dict[str, np.array].
+    # # Loads data in d4rl format, i.e. from Dict[str, np.array].
+    # def load_d4rl_dataset(self, data: Dict[str, np.ndarray]):
+    #     if self._size != 0:
+    #         raise ValueError("Trying to load data into non-empty replay buffer")
+    #     n_transitions = data["observations"].shape[0]
+    #     if n_transitions > self._buffer_size:
+    #         raise ValueError(
+    #             "Replay buffer is smaller than the dataset you are trying to load!"
+    #         )
+    #     self._states[:n_transitions] = self._to_tensor(data["observations"])
+    #     self._actions[:n_transitions] = self._to_tensor(data["actions"])
+    #     self._rewards[:n_transitions] = self._to_tensor(data["rewards"][..., None])
+    #     self._next_states[:n_transitions] = self._to_tensor(data["next_observations"])
+    #     self._dones[:n_transitions] = self._to_tensor(data["terminals"][..., None])
+    #     # self._experts[:n_transitions] = self._to_tensor(data["expert"][..., None])
+    #     self._size += n_transitions
+    #     self._pointer = min(self._size, n_transitions)
+
+    #     print(f"Dataset size: {n_transitions}")
+
+    #     # {state : action} dictionary
+    #     self._state_action_dict = {}
+    #     # {state, action : next_state} dictionary
+    #     self._state_action_next_state_dict = {}
+    #     # {state, action, next_state : done} dictionary
+    #     self._state_action_next_state_done_dict = {}
+    #     for i in range(n_transitions):
+    #         if tuple(self._states[i].tolist()) in self._state_action_dict.keys():
+    #             self._state_action_dict[tuple(self._states[i].tolist())].append(self._actions[i])
+    #         else:
+    #             self._state_action_dict[tuple(self._states[i].tolist())] = [self._actions[i]]
+
+    #         if tuple(self._states[i].tolist() + self._actions[i].tolist()) not in self._state_action_next_state_dict.keys():
+    #         #     self._state_action_next_state_dict[tuple(self._states[i].tolist() + self._actions[i].tolist())].append(data["next_observations"][i])
+    #         # else:
+    #             self._state_action_next_state_dict[tuple(self._states[i].tolist() + self._actions[i].tolist())] = [self._next_states[i]]
+            
+    #         if tuple(self._states[i].tolist() + self._actions[i].tolist() + self._next_states[i].tolist()) not in self._state_action_next_state_done_dict.keys():
+    #             self._state_action_next_state_done_dict[tuple(self._states[i].tolist() + self._actions[i].tolist() + self._next_states[i].tolist())] = [self._dones[i]]
+
+    #     # import pdb; pdb.set_trace()
+
+    # def sample(self, batch_size: int, all_actions: bool) -> TensorBatch:
+    #     indices = np.random.randint(0, min(self._size, self._pointer), size=batch_size)
+    #     states = self._states[indices]
+    #     actions = self._actions[indices]
+    #     rewards = self._rewards[indices]
+    #     next_states = self._next_states[indices]
+    #     dones = self._dones[indices]
+        
+    #     if all_actions:
+    #         actions_list = []
+    #         next_states_list = []
+    #         dones_list = []
+    #         for i in indices:
+    #             actions_list.append(torch.stack(self._state_action_dict[tuple(self._states[i].tolist())]))
+    #             next_states_after_action = []
+    #             dones_after_action = []
+    #             for action in self._state_action_dict[tuple(self._states[i].tolist())]:
+    #                 next_states_after_action_e = self._state_action_next_state_dict[tuple(self._states[i].tolist() + action.tolist())]
+    #                 next_states_after_action.append(next_states_after_action_e[0])
+    #                 dones_after_action.append(self._state_action_next_state_done_dict[tuple(self._states[i].tolist() + action.tolist() + next_states_after_action_e[0].tolist())][0])
+                
+    #             next_states_list.append(torch.stack(next_states_after_action))
+    #             dones_list.append(torch.stack(dones_after_action))
+    #         return [states, actions, rewards, next_states, dones, actions_list, next_states_list, dones_list]
+    #     else:
+    #         return [states, actions, rewards, next_states, dones]
+        
+    #     # experts = self._experts[indices]
+    #     # return [states, actions, rewards, next_states, dones, experts]
+        
+
     def load_d4rl_dataset(self, data: Dict[str, np.ndarray]):
         if self._size != 0:
             raise ValueError("Trying to load data into non-empty replay buffer")
+        
         n_transitions = data["observations"].shape[0]
         if n_transitions > self._buffer_size:
-            raise ValueError(
-                "Replay buffer is smaller than the dataset you are trying to load!"
-            )
+            raise ValueError("Replay buffer is smaller than the dataset you are trying to load!")
+        
         self._states[:n_transitions] = self._to_tensor(data["observations"])
         self._actions[:n_transitions] = self._to_tensor(data["actions"])
         self._rewards[:n_transitions] = self._to_tensor(data["rewards"][..., None])
         self._next_states[:n_transitions] = self._to_tensor(data["next_observations"])
         self._dones[:n_transitions] = self._to_tensor(data["terminals"][..., None])
-        # self._experts[:n_transitions] = self._to_tensor(data["expert"][..., None])
+        
         self._size += n_transitions
         self._pointer = min(self._size, n_transitions)
 
         print(f"Dataset size: {n_transitions}")
 
-        # {state : action} dictionary
-        self._state_action_dict = {}
-        # {state, action : next_state} dictionary
-        self._state_action_next_state_dict = {}
-        # {state, action, next_state : done} dictionary
-        self._state_action_next_state_done_dict = {}
+        # Precompute and store the lists based on state
+        self._precomputed_data = {}
+
         for i in range(n_transitions):
-            if tuple(self._states[i].tolist()) in self._state_action_dict.keys():
-                self._state_action_dict[tuple(self._states[i].tolist())].append(data["actions"][i])
-            else:
-                self._state_action_dict[tuple(self._states[i].tolist())] = [data["actions"][i]]
+            state_tuple = tuple(self._states[i].tolist())
+            action = self._actions[i]
+            next_state = self._next_states[i]
+            done = self._dones[i]
 
-            if tuple(self._states[i].tolist() + self._actions[i].tolist()) not in self._state_action_next_state_dict.keys():
-            #     self._state_action_next_state_dict[tuple(self._states[i].tolist() + self._actions[i].tolist())].append(data["next_observations"][i])
-            # else:
-                self._state_action_next_state_dict[tuple(self._states[i].tolist() + self._actions[i].tolist())] = [data["next_observations"][i]]
-            
-            if tuple(self._states[i].tolist() + self._actions[i].tolist() + self._next_states[i].tolist()) not in self._state_action_next_state_done_dict.keys():
-                self._state_action_next_state_done_dict[tuple(self._states[i].tolist() + self._actions[i].tolist() + self._next_states[i].tolist())] = [data["terminals"][i]]
+            if state_tuple not in self._precomputed_data:
+                self._precomputed_data[state_tuple] = {"actions": [], "next_states": [], "dones": []}
 
-        # import pdb; pdb.set_trace()
+            # Append the corresponding data to the precomputed dictionary
+            self._precomputed_data[state_tuple]["actions"].append(action)
+            self._precomputed_data[state_tuple]["next_states"].append(next_state)
+            self._precomputed_data[state_tuple]["dones"].append(done)
+        
+        # Convert lists to tensors for faster access
+        for key, value in self._precomputed_data.items():
+            value["actions"] = torch.stack(value["actions"])
+            value["next_states"] = torch.stack(value["next_states"])
+            value["dones"] = torch.stack(value["dones"])
 
     def sample(self, batch_size: int, all_actions: bool) -> TensorBatch:
         indices = np.random.randint(0, min(self._size, self._pointer), size=batch_size)
@@ -203,24 +276,26 @@ class ReplayBuffer:
             actions_list = []
             next_states_list = []
             dones_list = []
-            for i in indices:
-                actions_list.append(self._to_tensor(self._state_action_dict[tuple(self._states[i].tolist())]))
-                next_states_after_action = []
-                dones_after_action = []
-                for action in self._state_action_dict[tuple(self._states[i].tolist())]:
-                    next_states_after_action_e = self._state_action_next_state_dict[tuple(self._states[i].tolist() + action.tolist())]
-                    next_states_after_action.append(next_states_after_action_e)
-                    dones_after_action.append(self._state_action_next_state_done_dict[tuple(self._states[i].tolist() + action.tolist() + next_states_after_action_e[0].tolist())])
-                
-                next_states_list.append(self._to_tensor(next_states_after_action))
-                dones_list.append(self._to_tensor(dones_after_action))
+            
+            for state in states:
+                state_tuple = tuple(state.tolist())
+
+                # Directly retrieve precomputed actions, next_states, and dones for the current state
+                precomputed = self._precomputed_data[state_tuple]
+                actions_list.append(precomputed["actions"])
+                next_states_list.append(precomputed["next_states"])
+                dones_list.append(precomputed["dones"])
+            
+            # Convert the lists of tensors into batch tensors
+            # actions_list = torch.stack(actions_list)
+            # next_states_list = torch.stack(next_states_list)
+            # dones_list = torch.stack(dones_list)
+
             return [states, actions, rewards, next_states, dones, actions_list, next_states_list, dones_list]
         else:
             return [states, actions, rewards, next_states, dones]
-        
-        # experts = self._experts[indices]
-        # return [states, actions, rewards, next_states, dones, experts]
-        
+
+
 
     def add_transition(self):
         # Use this method to add new data into the replay buffer during fine-tuning.

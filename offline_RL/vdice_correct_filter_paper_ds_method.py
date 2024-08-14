@@ -461,25 +461,66 @@ class VDICE:
         log_dict: Dict,
     ):
         
-        semi_a_weighted_residual_list = []
+        # semi_a_weighted_residual_list = []
         
-        for i in range(observations.shape[0]):
-            with torch.no_grad():
-                target_q = self.q_target(observations[i].repeat(actions_list[i].shape[0], 1), actions_list[i])
-                semi_v = self.semi_v(observations[i].repeat(actions_list[i].shape[0], 1))
-                adv = target_q - semi_v
-                semi_a_weight = f_prime_inverse(self.f_name, adv)
-
-            mu = self.mu(observations[i].repeat(next_states_list[i].shape[0], 1))
-            mu_next = self.mu(next_states_list[i])
-            mu_residual = (1.0 - torch.squeeze(dones_list[i], dim=1)) * self.discount * mu_next - mu
-
-            semi_a_weighted_residual_list.append(mu_residual * semi_a_weight)
-            semi_a_weighted_residual_list[-1] = semi_a_weighted_residual_list[-1].mean()
-            semi_a_weighted_residual_list[-1] = self.semi_q_alpha * frenchel_dual(self.f_name, semi_a_weighted_residual_list[-1] / self.semi_q_alpha)
+        # for i in range(observations.shape[0]):
+        #     with torch.no_grad():
+        #         target_q = self.q_target(observations[i].repeat(actions_list[i].shape[0], 1), actions_list[i])
+        #         semi_v = self.semi_v(observations[i].repeat(actions_list[i].shape[0], 1))
+        #         adv = target_q - semi_v
+        #         semi_a_weight = f_prime_inverse(self.f_name, adv)
             
-           
-        mu_dual_loss = torch.mean(torch.tensor(semi_a_weighted_residual_list, device=self.device, dtype=torch.float32))
+            
+
+        #     mu = self.mu(observations[i].repeat(next_states_list[i].shape[0], 1))
+        #     mu_next = self.mu(next_states_list[i])
+        #     mu_residual = (1.0 - torch.squeeze(dones_list[i], dim=1)) * self.discount * mu_next - mu
+
+        #     semi_a_weighted_residual_list.append(mu_residual * semi_a_weight)
+        #     semi_a_weighted_residual_list[-1] = semi_a_weighted_residual_list[-1].mean()
+        #     semi_a_weighted_residual_list[-1] = self.semi_q_alpha * frenchel_dual(self.f_name, semi_a_weighted_residual_list[-1] / self.semi_q_alpha)
+
+        # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+        # import pdb; pdb.set_trace()
+        # Calculate target_q and semi_v for all observations and actions in a vectorized manner
+        with torch.no_grad():
+            repeated_observations = torch.cat([obs.repeat(act.shape[0], 1) for obs, act in zip(observations, actions_list)], dim=0)
+            repeated_actions = torch.cat(actions_list, dim=0)
+            
+            target_q = self.q_target(repeated_observations, repeated_actions)
+            semi_v = self.semi_v(repeated_observations)
+            
+            # Calculate advantages and semi_a_weights for all
+            adv = target_q - semi_v
+            semi_a_weight = f_prime_inverse(self.f_name, adv)
+
+        # Calculate mu and mu_residual in a vectorized manner
+        repeated_obs_for_mu = torch.cat([obs.repeat(next_states.shape[0], 1) for obs, next_states in zip(observations, next_states_list)], dim=0)
+        repeated_next_states = torch.cat(next_states_list, dim=0)
+
+        mu = self.mu(repeated_obs_for_mu)
+        mu_next = self.mu(repeated_next_states)
+
+        dones_flat = torch.cat(dones_list, dim=0)
+        mu_residual = (1.0 - torch.squeeze(dones_flat, dim=1)) * self.discount * mu_next - mu
+
+        # Apply semi_a_weight to mu_residual
+        semi_a_weighted_residual = mu_residual * semi_a_weight
+
+        # Create an index map to group residuals by observations
+        index_map = torch.cat([torch.full((act.shape[0],), i, dtype=torch.long) for i, act in enumerate(actions_list)]).to(self.device)
+
+        # Use scatter_add to sum up residuals per observation and divide by count to get the mean
+        semi_a_weighted_residual_sum = torch.zeros(observations.shape[0], device=self.device).scatter_add_(0, index_map, semi_a_weighted_residual)
+        action_counts = torch.tensor([act.shape[0] for act in actions_list], dtype=torch.float32, device=self.device)
+        semi_a_weighted_residual_mean = semi_a_weighted_residual_sum / action_counts
+
+        # Apply frenchel_dual in a vectorized way
+        semi_a_weighted_residual_list = self.semi_q_alpha * frenchel_dual(self.f_name, semi_a_weighted_residual_mean / self.semi_q_alpha)
+
+        # mu_dual_loss = torch.mean(torch.stack(semi_a_weighted_residual_list))
+        mu_dual_loss = torch.mean(semi_a_weighted_residual_list)
         mu_linear_loss = (1 - self.discount) * torch.mean(self.mu(init_observations))
         mu_loss = mu_linear_loss + mu_dual_loss
 
@@ -489,6 +530,7 @@ class VDICE:
 
         log_dict["vdice_loss/mu_loss"] = mu_loss.item()
         log_dict["value_train/mu_value"] = mu.mean().item()
+        # log_dict["value_train/mu_value"] = self.mu(observations).mean().item()
 
     def _update_policy(
         self,
@@ -615,6 +657,16 @@ class VDICE:
         #     self.semi_q = TwinQ(2, 2, layernorm=False, hidden_dim=256).to(self.device)
         #     self.semi_q_optimizer = torch.optim.Adam(self.semi_q.parameters(), lr=3e-4)
 
+
+        self._update_mu(observations,
+                            actions,
+                            next_observations, 
+                            dones, 
+                            init_observations,
+                            actions_list,
+                            next_states_list,
+                            dones_list,
+                            log_dict)
 
         if self.total_it >= 3e5:
             
@@ -1068,7 +1120,8 @@ def load_checkpoint(config):
                 key != "checkpoints_path" and \
                 key != "load_model" and \
                 key != "load_yaml" and \
-                key != "semi_q_alpha":
+                key != "semi_q_alpha" and \
+                    key != "alg":
                     setattr(config, key, value)
         except yaml.YAMLError as exc:
             print(exc)
