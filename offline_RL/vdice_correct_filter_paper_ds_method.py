@@ -460,22 +460,23 @@ class VDICE:
         dones_list: list,
         log_dict: Dict,
     ):
-        with torch.no_grad():
-            semi_a_weighted_residual_list = []
-            
-            for i in range(observations.shape[0]):
+        
+        semi_a_weighted_residual_list = []
+        
+        for i in range(observations.shape[0]):
+            with torch.no_grad():
                 target_q = self.q_target(observations[i].repeat(actions_list[i].shape[0], 1), actions_list[i])
                 semi_v = self.semi_v(observations[i].repeat(actions_list[i].shape[0], 1))
                 adv = target_q - semi_v
                 semi_a_weight = f_prime_inverse(self.f_name, adv)
 
-                mu = self.mu(observations[i].repeat(next_states_list[i].shape[0], 1))
-                mu_next = self.mu(next_states_list[i])
-                mu_residual = (1.0 - torch.squeeze(dones_list[i], dim=1)) * self.discount * mu_next - mu
+            mu = self.mu(observations[i].repeat(next_states_list[i].shape[0], 1))
+            mu_next = self.mu(next_states_list[i])
+            mu_residual = (1.0 - torch.squeeze(dones_list[i], dim=1)) * self.discount * mu_next - mu
 
-                semi_a_weighted_residual_list.append(mu_residual * semi_a_weight)
-                semi_a_weighted_residual_list[-1] = semi_a_weighted_residual_list[-1].mean()
-                semi_a_weighted_residual_list[-1] = self.semi_q_alpha * frenchel_dual(self.f_name, semi_a_weighted_residual_list[-1] / self.semi_q_alpha)
+            semi_a_weighted_residual_list.append(mu_residual * semi_a_weight)
+            semi_a_weighted_residual_list[-1] = semi_a_weighted_residual_list[-1].mean()
+            semi_a_weighted_residual_list[-1] = self.semi_q_alpha * frenchel_dual(self.f_name, semi_a_weighted_residual_list[-1] / self.semi_q_alpha)
             
            
         mu_dual_loss = torch.mean(torch.tensor(semi_a_weighted_residual_list, device=self.device, dtype=torch.float32))
