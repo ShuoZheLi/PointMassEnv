@@ -176,18 +176,20 @@ class ReplayBuffer:
         # {state, action, next_state : done} dictionary
         self._state_action_next_state_done_dict = {}
         for i in range(n_transitions):
-            if tuple(self._states[i].tolist()) in self._state_action_dict:
+            if tuple(self._states[i].tolist()) in self._state_action_dict.keys():
                 self._state_action_dict[tuple(self._states[i].tolist())].append(data["actions"][i])
             else:
                 self._state_action_dict[tuple(self._states[i].tolist())] = [data["actions"][i]]
 
-            if tuple(self._states[i].tolist() + self._actions[i].tolist()) not in self._state_action_next_state_dict:
+            if tuple(self._states[i].tolist() + self._actions[i].tolist()) not in self._state_action_next_state_dict.keys():
             #     self._state_action_next_state_dict[tuple(self._states[i].tolist() + self._actions[i].tolist())].append(data["next_observations"][i])
             # else:
                 self._state_action_next_state_dict[tuple(self._states[i].tolist() + self._actions[i].tolist())] = [data["next_observations"][i]]
             
-            if tuple(self._states[i].tolist() + self._actions[i].tolist() + self._next_states[i].tolist()) not in self._state_action_next_state_done_dict:
+            if tuple(self._states[i].tolist() + self._actions[i].tolist() + self._next_states[i].tolist()) not in self._state_action_next_state_done_dict.keys():
                 self._state_action_next_state_done_dict[tuple(self._states[i].tolist() + self._actions[i].tolist() + self._next_states[i].tolist())] = [data["terminals"][i]]
+
+        # import pdb; pdb.set_trace()
 
     def sample(self, batch_size: int, all_actions: bool) -> TensorBatch:
         indices = np.random.randint(0, min(self._size, self._pointer), size=batch_size)
