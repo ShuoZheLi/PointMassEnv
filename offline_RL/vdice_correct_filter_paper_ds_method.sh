@@ -79,7 +79,7 @@ for normalize_reward in "${normalize_reward_values[@]}"; do
 
             session_name="${session_name//./_}" # Replace dots with underscores
 
-            alg="semi_q_alpha_${semi_q_alpha}"
+            alg="semi_q_alpha_${semi_q_alpha}_batch_size_${batch_size}"
 
             # Append session name to the checkpoints path
             checkpoints_path="${checkpoints_path_base}/${session_name}"

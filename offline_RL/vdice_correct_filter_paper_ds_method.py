@@ -1121,7 +1121,8 @@ def load_checkpoint(config):
                 key != "load_model" and \
                 key != "load_yaml" and \
                 key != "semi_q_alpha" and \
-                    key != "alg":
+                key != "alg" and \
+                key != "batch_size":
                     setattr(config, key, value)
         except yaml.YAMLError as exc:
             print(exc)
