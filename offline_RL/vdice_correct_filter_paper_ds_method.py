@@ -99,6 +99,7 @@ class TrainConfig:
 
     # semi_q_reward: bool = True
     semi_q_alpha: float = 1.0
+    pi_ratio_step: int = int(3e5)
     
 
     # def __post_init__(self):
@@ -555,7 +556,7 @@ class VDICE:
 
         
 
-        if self.total_it >= 3e5:
+        if self.total_it >= config.pi_ratio_step:
             policy_out = self.semi_s_actor(observations)
             bc_losses = -policy_out.log_prob(actions).sum(-1, keepdim=False)
             policy_loss = torch.mean(semi_s_weight * bc_losses)
@@ -584,7 +585,7 @@ class VDICE:
             self.semi_sa_actor_or_lr_schedule.step()
             log_dict["vdice_loss/semi_sa_or_policy_loss"] = policy_loss.item()
         
-        if self.total_it < 3e5:
+        if self.total_it < config.pi_ratio_step:
             policy_out = self.semi_a_actor(observations)
             bc_losses = -policy_out.log_prob(actions).sum(-1, keepdim=False)
             policy_loss = torch.mean(semi_a_weight * bc_losses)
@@ -616,16 +617,27 @@ class VDICE:
     
     def train(self, batch: TensorBatch) -> Dict[str, float]:
         self.total_it += 1
-        (
-            observations,
-            actions,
-            rewards,
-            next_observations,
-            dones,
-            actions_list,
-            next_states_list,
-            dones_list,
-        ) = batch
+
+        if self.total_it >= config.pi_ratio_step:
+            (
+                observations,
+                actions,
+                rewards,
+                next_observations,
+                dones,
+                actions_list,
+                next_states_list,
+                dones_list,
+            ) = batch
+        else:
+            (
+                observations,
+                actions,
+                rewards,
+                next_observations,
+                dones,
+            ) = batch
+
         log_dict = {}
         flags = torch.ones_like(rewards)
 
@@ -636,7 +648,7 @@ class VDICE:
         init_observations = torch.as_tensor(np.array([[12.5, 4.5]] * observations.shape[0], dtype=np.float32), device=self.device)
 
 
-        if self.total_it < 3e5:
+        if self.total_it < config.pi_ratio_step:
             # Update V function
             semi_residual, true_residual = self._update_v(observations, 
                                                         actions, 
@@ -658,17 +670,17 @@ class VDICE:
         #     self.semi_q_optimizer = torch.optim.Adam(self.semi_q.parameters(), lr=3e-4)
 
 
-        self._update_mu(observations,
-                            actions,
-                            next_observations, 
-                            dones, 
-                            init_observations,
-                            actions_list,
-                            next_states_list,
-                            dones_list,
-                            log_dict)
+        # self._update_mu(observations,
+        #                     actions,
+        #                     next_observations, 
+        #                     dones, 
+        #                     init_observations,
+        #                     actions_list,
+        #                     next_states_list,
+        #                     dones_list,
+        #                     log_dict)
 
-        if self.total_it >= 3e5:
+        if self.total_it >= config.pi_ratio_step:
             
             # # Update U function
             # s_a_weight = self._update_U(semi_residual, 
@@ -1072,28 +1084,31 @@ def get_weights(dataset, trainer):
         true_sa_weight.append(true_sa.cpu().numpy())
 
     semi_s_weight = np.hstack(semi_s_weight)
-    semi_s_weight = semi_s_weight > 0
+    # semi_s_weight = semi_s_weight > 0
     
     semi_a_weight = np.hstack(semi_a_weight)
-    semi_a_weight = semi_a_weight > 0
+    # semi_a_weight = semi_a_weight > 0
     
     semi_s_or_a_weight = np.hstack(semi_s_or_a_weight)
-    semi_s_or_a_weight = semi_s_or_a_weight > 0
+    # semi_s_or_a_weight = semi_s_or_a_weight > 0
     
     semi_s_and_a_weight = np.hstack(semi_s_and_a_weight)
-    semi_s_and_a_weight = semi_s_and_a_weight > 0
+    # semi_s_and_a_weight = semi_s_and_a_weight > 0
 
     true_sa_weight = np.hstack(true_sa_weight)
-    true_sa_weight = true_sa_weight > 0
+    # true_sa_weight = true_sa_weight > 0
 
 
     return semi_s_weight, semi_a_weight, semi_s_or_a_weight, semi_s_and_a_weight, true_sa_weight
 
 def draw_traj(weights, dataset, env, save_path=None, trajectories=None, values=None):
     # select the observation in dataset with weights > 0
-    selected_obs = dataset["observations"][weights]
-    selected_next_obs = dataset["next_observations"][weights]
-    selected_terminals = dataset["terminals"][weights]
+    selected_obs = dataset["observations"][weights > 0]
+    selected_next_obs = dataset["next_observations"][weights > 0]
+    selected_terminals = dataset["terminals"][weights > 0]
+
+    weights = weights[weights > 0]
+    # import pdb; pdb.set_trace()
     # selected_traj_img = env.get_env_frame_with_selected_traj(obs=selected_obs, 
     #                                                         next_obs=selected_next_obs,
     #                                                         terminals=selected_terminals,
@@ -1105,6 +1120,7 @@ def draw_traj(weights, dataset, env, save_path=None, trajectories=None, values=N
                                                             terminals=selected_terminals,
                                                             trajectories=trajectories,
                                                             values=values,
+                                                            transition_weights=weights,
                                                             save_path=save_path)
     
     return selected_traj_img
@@ -1174,8 +1190,10 @@ def train():
         
     while t < int(config.max_timesteps):
         
-
-        batch = replay_buffer.sample(config.batch_size, all_actions=True)
+        if semi_trainer.total_it >= config.pi_ratio_step:
+            batch = replay_buffer.sample(config.batch_size, all_actions=True)
+        else:
+            batch = replay_buffer.sample(config.batch_size)
         batch = [b.to(config.device) if isinstance(b, torch.Tensor) else b for b in batch]
         semi_log_dict = semi_trainer.train(batch)
         semi_log_dict["vdice_step"] = semi_trainer.total_it

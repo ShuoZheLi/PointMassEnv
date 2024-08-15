@@ -264,7 +264,7 @@ class ReplayBuffer:
             value["next_states"] = torch.stack(value["next_states"])
             value["dones"] = torch.stack(value["dones"])
 
-    def sample(self, batch_size: int, all_actions: bool) -> TensorBatch:
+    def sample(self, batch_size: int, all_actions: bool=False) -> TensorBatch:
         indices = np.random.randint(0, min(self._size, self._pointer), size=batch_size)
         states = self._states[indices]
         actions = self._actions[indices]

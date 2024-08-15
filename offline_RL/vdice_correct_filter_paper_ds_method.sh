@@ -4,8 +4,8 @@
 env_1="antmaze-umaze-v2"
 env_2="antmaze-umaze-v2"
 conda_env="corl_0"
-project="tune_convergence_expect_indep_fast"
-checkpoints_path_base="tune_convergence_expect_indep_fast"
+project="tune_pi_ratio"
+checkpoints_path_base="tune_pi_ratio"
 
 env_name="EmptyRoom"
 discrete_action="True"
@@ -22,7 +22,7 @@ discount_values=(0.99)
 
 semi_dice_lambda_values=(0.6)
 true_dice_alpha_values=(1.25)
-semi_q_alpha_values=(0.2 0.3 0.4 0.5 0.8 1.0 1.5 2.0)
+semi_q_alpha_values=(1.0)
 # semi_q_alpha_values=(0.2 0.3 0.4 0.8)
 
 percent_expert="0"
@@ -30,8 +30,8 @@ percent_expert="0"
 eval_freq="5000"
 save_freq="5000"
 
-batch_size="256"
-hidden_dim="256"
+batch_size_values=(256)
+hidden_dim_values=(32 64 128 256)
 
 
 seed=(19990526)
@@ -43,85 +43,91 @@ experiment_counter=0
 
 # Loop through each parameter set
 for normalize_reward in "${normalize_reward_values[@]}"; do
-  for true_dice_alpha in "${true_dice_alpha_values[@]}"; do
-    for discount in "${discount_values[@]}"; do
-      for semi_dice_lambda in "${semi_dice_lambda_values[@]}"; do
-        for semi_q_alpha in "${semi_q_alpha_values[@]}"; do
-          for current_seed in "${seed[@]}"; do
-            # Calculate the device number for the current session
-            device_index=$(( experiment_counter % ${#GPUS[@]} ))
-            device=${GPUS[$device_index]}
+  for hidden_dim in "${hidden_dim_values[@]}"; do
+    for batch_size in "${batch_size_values[@]}"; do
+      for true_dice_alpha in "${true_dice_alpha_values[@]}"; do
+        for discount in "${discount_values[@]}"; do
+          for semi_dice_lambda in "${semi_dice_lambda_values[@]}"; do
+            for semi_q_alpha in "${semi_q_alpha_values[@]}"; do
+              for current_seed in "${seed[@]}"; do
+                # Calculate the device number for the current session
+                device_index=$(( experiment_counter % ${#GPUS[@]} ))
+                device=${GPUS[$device_index]}
 
-            # Construct the session name based on parameters
-            session_name="${project}"
-            # # append discount
-            # session_name="${session_name}_discount_${discount}"
-            # # append normalize_reward
-            # session_name="${session_name}_normalize_reward_${normalize_reward}"
-            # # append true_dice_alpha
-            # session_name="${session_name}_true_dice_alpha_${true_dice_alpha}"
-            # # append semi_dice_lambda
-            # session_name="${session_name}_semi_dice_lambda_${semi_dice_lambda}"
-            # # append seed
-            # session_name="${session_name}_seed_${current_seed}"
-            # # append percent_expert
-            # session_name="${session_name}_percent_expert_${percent_expert}"
-            # # append eval_freq
-            # session_name="${session_name}_eval_freq_${eval_freq}"
-            # # append save_freq
-            # session_name="${session_name}_save_freq_${save_freq}"
-            # # append batch_size
-            # session_name="${session_name}_batch_size_${batch_size}"
-            # # append hidden_dim
-            # session_name="${session_name}_hidden_dim_${hidden_dim}"
-            # append semi_q_alpha
-            session_name="${session_name}_semi_q_alpha_${semi_q_alpha}"
+                # Construct the session name based on parameters
+                session_name="${project}"
+                # # append discount
+                # session_name="${session_name}_discount_${discount}"
+                # # append normalize_reward
+                # session_name="${session_name}_normalize_reward_${normalize_reward}"
+                # # append true_dice_alpha
+                # session_name="${session_name}_true_dice_alpha_${true_dice_alpha}"
+                # # append semi_dice_lambda
+                # session_name="${session_name}_semi_dice_lambda_${semi_dice_lambda}"
+                # # append seed
+                # session_name="${session_name}_seed_${current_seed}"
+                # # append percent_expert
+                # session_name="${session_name}_percent_expert_${percent_expert}"
+                # # append eval_freq
+                # session_name="${session_name}_eval_freq_${eval_freq}"
+                # # append save_freq
+                # session_name="${session_name}_save_freq_${save_freq}"
+                # append batch_size
+                session_name="${session_name}_batch_size_${batch_size}"
+                # append hidden_dim
+                session_name="${session_name}_hidden_dim_${hidden_dim}"
+                # # append semi_q_alpha
+                # session_name="${session_name}_semi_q_alpha_${semi_q_alpha}"
 
-            session_name="${session_name//./_}" # Replace dots with underscores
+                session_name="${session_name//./_}" # Replace dots with underscores
 
-            alg="semi_q_alpha_${semi_q_alpha}_batch_size_${batch_size}"
+                # alg="semi_q_alpha_${semi_q_alpha}"
+                alg=" "
+                alg="${alg}_hidden_dim_${hidden_dim}"
+                alg="${alg}_batch_size_${batch_size}"
+                
 
-            # Append session name to the checkpoints path
-            checkpoints_path="${checkpoints_path_base}/${session_name}"
-            checkpoints_path="${checkpoints_path//./_}" # Replace dots with underscores
+                # Append session name to the checkpoints path
+                checkpoints_path="${checkpoints_path_base}/${session_name}"
+                checkpoints_path="${checkpoints_path//./_}" # Replace dots with underscores
 
-            # Create a new tmux session with the session name
-            tmux new-session -d -s $session_name
+                # Create a new tmux session with the session name
+                tmux new-session -d -s $session_name
 
-            # Activate the conda environment
-            tmux send-keys -t $session_name "source /data/shuozhe/miniconda3/bin/activate $conda_env" C-m
-            # tmux send-keys -t $session_name "conda activate $conda_env" C-m
+                # Activate the conda environment
+                tmux send-keys -t $session_name "source /data/shuozhe/miniconda3/bin/activate $conda_env" C-m
+                # tmux send-keys -t $session_name "conda activate $conda_env" C-m
 
-            # Start the experiment with the specified parameters
-            tmux send-keys -t $session_name "CUDA_VISIBLE_DEVICES=$device \
-                                            python3 offline_RL/vdice_correct_filter_paper_ds_method.py \
-                                            --env_name $env_name \
-                                            --discrete_action $discrete_action \
-                                            --percent_expert $percent_expert \
-                                            --eval_freq $eval_freq \
-                                            --save_freq $save_freq \
-                                            --batch_size $batch_size \
-                                            --hidden_dim $hidden_dim \
-                                            --env_1 $env_1 \
-                                            --env_2 $env_2 \
-                                            --normalize_reward $normalize_reward \
-                                            --true_dice_alpha $true_dice_alpha \
-                                            --discount $discount \
-                                            --semi_dice_lambda $semi_dice_lambda \
-                                            --semi_q_alpha $semi_q_alpha \
-                                            --seed $current_seed \
-                                            --max_timesteps 1000000 \
-                                            --project $project \
-                                            --load_model checkpoint_299999.pt \
-                                            --load_yaml config.yaml \
-                                            --checkpoints_path $checkpoints_path \
-                                            --alg $alg" C-m
+                # Start the experiment with the specified parameters
+                tmux send-keys -t $session_name "CUDA_VISIBLE_DEVICES=$device \
+                                                python3 offline_RL/vdice_correct_filter_paper_ds_method.py \
+                                                --env_name $env_name \
+                                                --discrete_action $discrete_action \
+                                                --percent_expert $percent_expert \
+                                                --eval_freq $eval_freq \
+                                                --save_freq $save_freq \
+                                                --batch_size $batch_size \
+                                                --hidden_dim $hidden_dim \
+                                                --env_1 $env_1 \
+                                                --env_2 $env_2 \
+                                                --normalize_reward $normalize_reward \
+                                                --true_dice_alpha $true_dice_alpha \
+                                                --discount $discount \
+                                                --semi_dice_lambda $semi_dice_lambda \
+                                                --semi_q_alpha $semi_q_alpha \
+                                                --seed $current_seed \
+                                                --max_timesteps 1000000 \
+                                                --project $project \
+                                                --checkpoints_path $checkpoints_path \
+                                                --alg $alg" C-m
 
-            # Increment the experiment counter
-            experiment_counter=$((experiment_counter + 1))
+                # Increment the experiment counter
+                experiment_counter=$((experiment_counter + 1))
 
-            # Delay to avoid potential race conditions
-            sleep 5
+                # Delay to avoid potential race conditions
+                sleep 5
+              done
+            done
           done
         done
       done
