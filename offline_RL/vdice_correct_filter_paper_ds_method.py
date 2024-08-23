@@ -815,10 +815,13 @@ class VDICE:
             adv = target_q - semi_v
             semi_a_weight = f_prime_inverse(self.f_name, adv)
             
+
+            semi_a_weight_01 = torch.where(semi_a_weight > 0, torch.ones_like(semi_a_weight), torch.zeros_like(semi_a_weight))
             mu = self.mu(observations)
             mu_next = self.mu(next_observations)
             mu_residual = (1.0 - terminals.float()) * self.discount * mu_next - mu
-            semi_s_weight = f_prime_inverse(self.f_name, semi_a_weight * mu_residual)
+            # semi_s_weight = f_prime_inverse(self.f_name, semi_a_weight * mu_residual)
+            semi_s_weight = f_prime_inverse(self.f_name, semi_a_weight_01 * mu_residual)
 
 
 
@@ -889,10 +892,6 @@ def trainer_init(config: TrainConfig, env):
         with open(os.path.join(config.checkpoints_path, "config.yaml"), "w") as f:
             pyrallis.dump(config, f)
 
-    # Set seeds
-    seed = config.seed
-    set_seed(seed, env)
-
     actor = GaussianPolicy(
         state_dim, action_dim, max_action, dropout=config.actor_dropout
     ).to(config.device)
@@ -942,13 +941,46 @@ def trainer_init(config: TrainConfig, env):
     }
 
     print("---------------------------------------")
-    print(f"Training VDICE, Env: {config.env_1}, Seed: {seed}")
+    print(f"Training VDICE, Env: {config.env_1}, Seed: {config.seed}")
     print("---------------------------------------")
 
     # Initialize actor
     trainer = VDICE(**kwargs)
     return trainer
 
+def get_trajectory_indices(terminals):
+    # Finds the indices where each trajectory begins and ends
+    end_indices = np.where(terminals)[0]
+    start_indices = np.append(0, end_indices[:-1] + 1)
+    return list(zip(start_indices, end_indices + 1))
+
+def modify_dataset(dataset, expert_dataset):
+    # Assuming terminals are stored as boolean where True indicates the end of a trajectory
+    trajectory_indices = get_trajectory_indices(dataset['terminals'])
+    expert_trajectory_indices = get_trajectory_indices(expert_dataset['terminals'])
+
+    # Determine how many trajectories to replace
+    trajectories_to_replace = int(config.percent_expert * len(trajectory_indices))
+
+    # Randomly choose trajectories to replace
+    indices_to_replace = np.random.choice(len(trajectory_indices), trajectories_to_replace, replace=False)
+    expert_indices = np.random.choice(len(expert_trajectory_indices), trajectories_to_replace, replace=False)
+
+    # Replacement process
+    for key in dataset.keys():
+        if key == 'trajectories':
+            continue
+        original_data = [dataset[key][start:end] for start, end in trajectory_indices]
+        expert_data = [expert_dataset[key][start:end] for start, end in expert_trajectory_indices]
+
+        # Replace selected trajectories with expert trajectories
+        for idx, exp_idx in zip(sorted(indices_to_replace, reverse=True), expert_indices):
+            original_data[idx] = expert_data[exp_idx]
+
+        # Flatten the list back into an array
+        dataset[key] = np.concatenate(original_data)
+    
+    return dataset
 
 def create_dataset(config: TrainConfig):
 
@@ -960,14 +992,9 @@ def create_dataset(config: TrainConfig):
     dataset = np.load("dataset.npy", allow_pickle=True)
     # import pdb; pdb.set_trace()
     expert_dataset = np.load("expert_dataset.npy", allow_pickle=True)
-
-    expert_idx = np.random.choice(np.arange(int(dataset["observations"].shape[0])), int(config.percent_expert * dataset["observations"].shape[0]), 
-                                  replace=False)
-    dataset["observations"][expert_idx] = expert_dataset["observations"][expert_idx]
-    dataset["actions"][expert_idx] = expert_dataset["actions"][expert_idx]
-    dataset["rewards"][expert_idx] = expert_dataset["rewards"][expert_idx]
-    dataset["next_observations"][expert_idx] = expert_dataset["next_observations"][expert_idx]
-    dataset["terminals"][expert_idx] = expert_dataset["terminals"][expert_idx]
+    
+    if config.percent_expert > 0:
+        dataset = modify_dataset(dataset, expert_dataset)
 
 
     state_dim = env.observation_space.shape[0]
@@ -1106,8 +1133,12 @@ def draw_traj(weights, dataset, env, save_path=None, trajectories=None, values=N
     selected_obs = dataset["observations"][weights > 0]
     selected_next_obs = dataset["next_observations"][weights > 0]
     selected_terminals = dataset["terminals"][weights > 0]
+    selected_actions = dataset["actions"][weights > 0]
 
     weights = weights[weights > 0]
+
+    # TODO
+    weights = weights > 0
     # import pdb; pdb.set_trace()
     # selected_traj_img = env.get_env_frame_with_selected_traj(obs=selected_obs, 
     #                                                         next_obs=selected_next_obs,
@@ -1118,6 +1149,7 @@ def draw_traj(weights, dataset, env, save_path=None, trajectories=None, values=N
     selected_traj_img = env.get_env_frame_with_selected_traj_plt(obs=selected_obs, 
                                                             next_obs=selected_next_obs,
                                                             terminals=selected_terminals,
+                                                            actions=selected_actions,
                                                             trajectories=trajectories,
                                                             values=values,
                                                             transition_weights=weights,
@@ -1137,8 +1169,8 @@ def load_checkpoint(config):
                 key != "load_model" and \
                 key != "load_yaml" and \
                 key != "semi_q_alpha" and \
-                key != "alg" and \
-                key != "batch_size":
+                key != "alg":
+                # key != "batch_size":
                     setattr(config, key, value)
         except yaml.YAMLError as exc:
             print(exc)
@@ -1146,6 +1178,9 @@ def load_checkpoint(config):
     dataset, expert_dataset, state_dim, action_dim, env, replay_buffer = create_dataset(config)
     semi_trainer = trainer_init(config, env)
     semi_trainer.load_state_dict(torch.load(config.load_model))
+
+    # TODO
+    semi_trainer.total_it = int(299999)
 
     # config.batch_size = 64
     return semi_trainer, dataset, expert_dataset, state_dim, action_dim, env, replay_buffer
@@ -1190,7 +1225,7 @@ def train():
         
     while t < int(config.max_timesteps):
         
-        if semi_trainer.total_it >= config.pi_ratio_step:
+        if semi_trainer.total_it + 1 >= config.pi_ratio_step:
             batch = replay_buffer.sample(config.batch_size, all_actions=True)
         else:
             batch = replay_buffer.sample(config.batch_size)
@@ -1294,4 +1329,5 @@ def train():
 
 if __name__ == "__main__":
     config = pyrallis.parse(config_class=TrainConfig)
+    set_seed(config.seed)
     train()
