@@ -43,7 +43,7 @@ def get_env_frame(self, pos, goal, save_path='env_frame.png'):
     img_array = np.moveaxis(np.transpose(img_array), 0, -1)
     return img_array
 
-def get_env_frame_with_selected_traj_plt(self, start=None, goal=None, obs=None, next_obs=None, terminals=None, trajectories=None, values=None, transition_weights=None, save_path=None):
+def get_env_frame_with_selected_traj_plt(self, start=None, goal=None, obs=None, next_obs=None, terminals=None, actions=None, trajectories=None, values=None, transition_weights=None, save_path=None):
     
     if start is None:
         start = self._start
@@ -85,10 +85,12 @@ def get_env_frame_with_selected_traj_plt(self, start=None, goal=None, obs=None, 
     # Draw trajectories with arrows
     for i in range(len(obs)):
         if terminals[i]:
-            continue
-        start = obs[i] - 0.5
-        end = next_obs[i] - 0.5
-        ax.plot([start[1] + 0.5, end[1] + 0.5], [start[0] + 0.5, end[0] + 0.5], color='green', linewidth=1, alpha=transition_weights[i])
+            start = obs[i] - 0.5
+            end = start + actions[i]
+        else:
+            start = obs[i] - 0.5
+            end = next_obs[i] - 0.5
+        ax.plot([start[1] + 0.5, end[1] + 0.5], [start[0] + 0.5, end[0] + 0.5], color='green', linewidth=2, alpha=transition_weights[i])
         ax.annotate('', xy=(end[1] + 0.5, end[0] + 0.5), xytext=(start[1] + 0.5, start[0] + 0.5),
                     arrowprops=dict(arrowstyle='->', color='green', shrinkA=0, shrinkB=0, linewidth=2, alpha=transition_weights[i]))
 
