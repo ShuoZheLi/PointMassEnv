@@ -820,8 +820,8 @@ class VDICE:
             mu = self.mu(observations)
             mu_next = self.mu(next_observations)
             mu_residual = (1.0 - terminals.float()) * self.discount * mu_next - mu
-            # semi_s_weight = f_prime_inverse(self.f_name, semi_a_weight * mu_residual)
-            semi_s_weight = f_prime_inverse(self.f_name, semi_a_weight_01 * mu_residual)
+            semi_s_weight = f_prime_inverse(self.f_name, semi_a_weight * mu_residual)
+            # semi_s_weight = f_prime_inverse(self.f_name, semi_a_weight_01 * mu_residual)
 
 
 
@@ -989,9 +989,9 @@ def create_dataset(config: TrainConfig):
                                 goal_radius=0.8,
                                 env_name=config.env_name,
                                 reward_type=config.reward_type)
-    dataset = np.load("dataset.npy", allow_pickle=True)
+    dataset = np.load("dataset/uniform/uniform_dataset.npy", allow_pickle=True)
     # import pdb; pdb.set_trace()
-    expert_dataset = np.load("expert_dataset.npy", allow_pickle=True)
+    expert_dataset = np.load("dataset/uniform/expert_dataset.npy", allow_pickle=True)
     
     if config.percent_expert > 0:
         dataset = modify_dataset(dataset, expert_dataset)
