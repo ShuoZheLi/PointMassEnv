@@ -1040,6 +1040,13 @@ def create_dataset(config: TrainConfig):
 
     return dataset, expert_dataset, state_dim, action_dim, env, replay_buffer
 
+def create_dataset_by_weights(weights, dataset):
+    new_dataset = {}
+    for key in dataset.keys():
+        new_dataset[key] = dataset[key][weights > 0]
+
+    return new_dataset
+
 def eval_policy(actor, global_step, gif_dir, device, wandb, name):
     env = PointMassEnv(start=np.array([12.5, 4.5], dtype=np.float32), 
                                goal=np.array([4.5, 12.5], dtype=np.float32), 

@@ -4,14 +4,14 @@
 env_1="antmaze-umaze-v2"
 env_2="antmaze-umaze-v2"
 conda_env="corl_0"
-project="un_dataset"
-checkpoints_path_base="un_dataset"
+project="un_dataset_load_64"
+checkpoints_path_base="un_dataset_load_64"
 
 env_name="EmptyRoom"
 discrete_action="True"
 normalize_state=(False)
 normalize_reward_values=(True)
-discount_values=(0.99)
+discount_values=(0.976)
 # semi_dice_lambda_values=(0.2 0.4 0.6 0.8)
 # true_dice_alpha_values=(1)
 # semi_dice_lambda_values=(0.2)
@@ -20,16 +20,17 @@ discount_values=(0.99)
 # semi_dice_lambda_values=(0.7)
 # true_dice_alpha_values=(0.5)
 
-semi_dice_lambda_values=(0.4 0.5 0.6 0.7)
+semi_dice_lambda_values=(0.6)
 true_dice_alpha_values=(1.25)
 semi_q_alpha_values=(1.0)
+# semi_q_alpha_values=(0.2 0.3 0.4 0.8)
 
 percent_expert="0"
 
 eval_freq="5000"
 save_freq="5000"
 
-batch_size_values=(64 128 256)
+batch_size_values=(64)
 hidden_dim_values=(256)
 
 
@@ -100,7 +101,7 @@ for normalize_reward in "${normalize_reward_values[@]}"; do
 
                 # Start the experiment with the specified parameters
                 tmux send-keys -t $session_name "CUDA_VISIBLE_DEVICES=$device \
-                                                python3 offline_RL/vdice_correct_filter_paper_ds_method.py \
+                                                python3 offline_RL/crosdice_dataset_evol.py \
                                                 --env_name $env_name \
                                                 --discrete_action $discrete_action \
                                                 --percent_expert $percent_expert \
@@ -119,7 +120,9 @@ for normalize_reward in "${normalize_reward_values[@]}"; do
                                                 --max_timesteps 1000000 \
                                                 --project $project \
                                                 --checkpoints_path $checkpoints_path \
-                                                --alg $alg" C-m
+                                                --alg $alg \
+                                                --load_model un_dataset/un_dataset_semi_dice_lambda_0_6_batch_size_64/model/checkpoint_299999.pt \
+                                                --load_yaml un_dataset/un_dataset_semi_dice_lambda_0_6_batch_size_64/config.yaml" C-m
 
                 # Increment the experiment counter
                 experiment_counter=$((experiment_counter + 1))

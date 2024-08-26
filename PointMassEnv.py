@@ -270,7 +270,7 @@ if __name__ == '__main__':
     env._goal = np.array(goal[-1], dtype=np.float32)
     obs, _ = env.reset()
 
-    dataset = np.load('new_dataset.npy', allow_pickle=True)
+    dataset = np.load('dataset.npy', allow_pickle=True)
 
     # import pdb; pdb.set_trace()
 
@@ -280,6 +280,7 @@ if __name__ == '__main__':
                                                obs=dataset["observations"], 
                                                next_obs=dataset["next_observations"], 
                                                terminals=dataset["terminals"],
+                                               actions=dataset["actions"],
                                                save_path='env_frame.png')
     exit()
     

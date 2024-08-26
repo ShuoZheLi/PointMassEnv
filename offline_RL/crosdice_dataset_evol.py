@@ -1040,6 +1040,22 @@ def create_dataset(config: TrainConfig):
 
     return dataset, expert_dataset, state_dim, action_dim, env, replay_buffer
 
+def filter_dataset_by_weights(weights, dataset):
+    new_dataset = {}
+    for key in dataset.keys():
+        if key != "trajectories":
+            new_dataset[key] = np.array(dataset[key])[weights > 0]
+
+    
+    replay_buffer = ReplayBuffer(
+        new_dataset["observations"].shape[1],
+        new_dataset["actions"].shape[1],
+        config.buffer_size,
+        config.device,
+    )
+    replay_buffer.load_d4rl_dataset(new_dataset)
+    return new_dataset, replay_buffer
+
 def eval_policy(actor, global_step, gif_dir, device, wandb, name):
     env = PointMassEnv(start=np.array([12.5, 4.5], dtype=np.float32), 
                                goal=np.array([4.5, 12.5], dtype=np.float32), 
@@ -1194,6 +1210,9 @@ def train():
         dataset, expert_dataset, state_dim, action_dim, env, replay_buffer = create_dataset(config)
         semi_trainer = trainer_init(config, env)
 
+    import pdb; pdb.set_trace()
+
+    dataset, replay_buffer = filter_dataset_by_weights(get_weights(dataset, semi_trainer)[1], dataset)
 
     wandb_init(asdict(config))
     t = 0

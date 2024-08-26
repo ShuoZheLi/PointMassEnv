@@ -82,6 +82,8 @@ def get_env_frame_with_selected_traj_plt(self, start=None, goal=None, obs=None, 
     else:
         transition_weights = np.zeros_like(terminals)
 
+    # transition_weights = np.ones_like(terminals)
+
     # Draw trajectories with arrows
     for i in range(len(obs)):
         if terminals[i]:
