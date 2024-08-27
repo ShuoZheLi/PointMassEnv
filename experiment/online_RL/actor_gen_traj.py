@@ -45,16 +45,23 @@ def gen_traj(actor, env, device, traj_dir, traj_num, transition_num, discrete=Fa
                                goal=np.array([4.5, 12.5], dtype=np.float32), 
                                goal_radius=0.8, 
                                env_name="EmptyRoom")
-    traj = []
     actor.eval()
     images = []
     count_success = 0
     transition_count = 0
+
+
     for i in range(traj_num):
-        traj.append([])
+
+        obs_array = []
+        action_array = []
+        reward_array = []
+        next_obs_array = []
+        terminal_array = []
+        success_array = []
+
         done = False
         obs, _ = env.reset()
-        traj[-1].append(obs)
         # images.append(np.moveaxis(np.transpose(env.render()), 0, -1))
         epi_len = 1
         while not done:
@@ -63,41 +70,71 @@ def gen_traj(actor, env, device, traj_dir, traj_num, transition_num, discrete=Fa
             mean = mean.cpu().numpy()
             if discrete:
                 mean = discrete_action(mean)
-                if np.random.rand() < 1 - epi_len * 0.01:
+                if np.random.rand() < 0.83:
                     mean[0][0] = np.random.choice([-1, 0, 1])
                     mean[0][1] = np.random.choice([-1, 0, 1])
             else:
                 mean = np.random.normal(mean, 20 / epi_len)
             mean = mean[0]
-            dataset["observations"].append(obs)
-            dataset["actions"].append(mean)
+
+            obs_array.append(obs)
+            action_array.append(mean)
+            # dataset["observations"].append(obs)
+            # dataset["actions"].append(mean)
             obs, reward, done, trunc, info = env.step(mean)
-            dataset["rewards"].append(reward)
-            dataset["terminals"].append(done)
-            traj[-1].append(obs)
+            # dataset["rewards"].append(reward)
+            # dataset["terminals"].append(done)
+            reward_array.append(reward)
+            next_obs_array.append(obs)
+            terminal_array.append(done)
+
             transition_count += 1
             epi_len += 1
             if done and info["success"]:
                 count_success += 1
-                dataset["success"].append(True)
+                # dataset["success"].append(True)
+                print("success length: ", epi_len)
+                success_array.append(True)
+                if epi_len != 8:
+                    dataset["observations"] += obs_array
+                    dataset["actions"] += action_array
+                    dataset["rewards"] += reward_array
+                    dataset["next_observations"] += next_obs_array
+                    dataset["terminals"] += terminal_array
+                    success_array = [True] * len(success_array)
+                    dataset["success"] += success_array
+                else:
+                    print("rarely good !!!!")
+            elif done:
+                dataset["observations"] += obs_array
+                dataset["actions"] += action_array
+                dataset["rewards"] += reward_array
+                dataset["next_observations"] += next_obs_array
+                dataset["terminals"] += terminal_array
+                dataset["success"] += success_array
+                # pass
             else:
-                dataset["success"].append(False)
+                # dataset["success"].append(False)
+                success_array.append(False)
+                
+
         # print success rate
         print("success count: ", count_success)
         print("num of trans: ", transition_count)
+        print()
         if transition_count > transition_num:
             break
 
-    dataset["next_observations"] = dataset["observations"][1:] + [obs]
+    # dataset["next_observations"] = dataset["observations"][1:] + [obs]
 
     dataset["observations"] = np.array(dataset["observations"], dtype=np.float32)
     dataset["actions"] = np.array(dataset["actions"], dtype=np.float32)
     dataset["rewards"] = np.array(dataset["rewards"], dtype=np.float32)
     dataset["next_observations"] = np.array(dataset["next_observations"], dtype=np.float32)
     dataset["terminals"] = np.array(dataset["terminals"], dtype=np.float32)
-    dataset["trajectories"] = np.array(traj, dtype=object)
+    dataset["success"] = np.array(dataset["success"], dtype=np.float32)
 
-
+    # import pdb; pdb.set_trace()
     # save the trajectory
     with open(traj_dir, 'wb') as f:
         pickle.dump(dataset, f)
@@ -111,7 +148,7 @@ if __name__ == "__main__":
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     actor = Actor(envs).to(device)
-    actor.load("EmptyRoom_SAC.pth")
-    gen_traj(actor, envs, device, "dataset.npy", 90000000, transition_num=1400, discrete=True)
+    actor.load("dataset/EmptyRoom/uniform/expert_actor.pth")
+    gen_traj(actor, envs, device, "dataset.npy", 90000000, transition_num=5000, discrete=True)
 
 
