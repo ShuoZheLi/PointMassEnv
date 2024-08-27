@@ -260,29 +260,28 @@ if __name__ == '__main__':
 
     # Set up the display
     width, height = 800, 800
-    # screen = pygame.display.set_mode((width, height))
-    # pygame.display.set_caption('PointMassEnv Game')
+    screen = pygame.display.set_mode((width, height))
+    pygame.display.set_caption('PointMassEnv Game')
     
     start_pos = [[12.5, 4.5]]
     goal = [[4.5, 12.5]]
 
-    env = PointMassEnv(start=np.array(start_pos[0], dtype=np.float32), env_name="EmptyRoom",)
-    env._goal = np.array(goal[-1], dtype=np.float32)
+    env = PointMassEnv(start=np.array([12.5, 4.5], dtype=np.float32), 
+                                goal=np.array([4.5, 12.5], dtype=np.float32), 
+                                goal_radius=0.8,
+                                env_name="EmptyRoom",
+                                reward_type="sparse")
+    
+    # env._goal = np.array(goal[-1], dtype=np.float32)
     obs, _ = env.reset()
 
-    dataset = np.load('dataset.npy', allow_pickle=True)
+    dataset = {}
 
-    # import pdb; pdb.set_trace()
-
-    # img = env.get_env_frame_with_traj(obs, env._goal, trajectories, save_path='env_frame.png')
-    img = env.get_env_frame_with_selected_traj_plt(start=obs, 
-                                               goal=env._goal, 
-                                               obs=dataset["observations"], 
-                                               next_obs=dataset["next_observations"], 
-                                               terminals=dataset["terminals"],
-                                               actions=dataset["actions"],
-                                               save_path='env_frame.png')
-    exit()
+    dataset["observations"] = []
+    dataset["actions"] = []
+    dataset["rewards"] = []
+    dataset["terminals"] = []
+    dataset["next_observations"] = []
     
     step_num = 0
     # Game loop
@@ -297,9 +296,16 @@ if __name__ == '__main__':
         # trajectories = [[[0,0],[1,1],[2,2]], [[3,3],[4,4],[5,5]]]
         # img = env.get_env_frame_with_traj(obs, env._goal, trajectories)
 
-        # trajectories = np.load('dataset.npy', allow_pickle=True)
-        # trajectories = trajectories['trajectories']
-        # img = env.get_env_frame_with_traj(obs, env._goal, trajectories, save_path='env_frame.png')
+        
+        # dataset = np.load('hand_dataset.npy', allow_pickle=True)
+        # # import pdb; pdb.set_trace()
+        # img = env.get_env_frame_with_selected_traj_plt(start=obs, 
+        #                                        goal=env._goal, 
+        #                                        obs=dataset["observations"], 
+        #                                        next_obs=dataset["next_observations"], 
+        #                                        terminals=dataset["terminals"],
+        #                                        actions=dataset["actions"],
+        #                                        save_path='env_frame.png')
         # exit()
 
         img_surface = pygame.surfarray.make_surface(img)
@@ -311,18 +317,50 @@ if __name__ == '__main__':
         # Key input handling
         keys = pygame.key.get_pressed()
         if keys[pygame.K_LEFT]:
-            action = [0, -0.5]  # Move the image left
+            action = [0, -1]  # Move the image left
         if keys[pygame.K_RIGHT]:
-            action = [0, 0.5]  # Move the image right
+            action = [0, 1]  # Move the image right
         if keys[pygame.K_UP]:
-            action = [-0.5, 0]  # Move the image up
+            action = [-1, 0]  # Move the image up
         if keys[pygame.K_DOWN]:
-            action = [0.5, 0]  # Move the image down
-        obs, reward, term, trunc, info = env.step(action)
-        print('reward:', reward)
-        print('step_num:', step_num)
+            action = [1, 0]  # Move the image down
+        if keys[pygame.K_LSHIFT] and keys[pygame.K_RIGHT]:
+            action = [-1, 1]
+        if keys[pygame.K_LSHIFT] and keys[pygame.K_LEFT]:
+            action = [1, -1]
+        if keys[pygame.K_RSHIFT] and keys[pygame.K_RIGHT]:
+            action = [1, 1]
+        if keys[pygame.K_RSHIFT] and keys[pygame.K_LEFT]:
+            action = [-1, -1]
+        if keys[pygame.K_RSHIFT] and keys[pygame.K_LSHIFT]:
+            break
+
+        if action != [0, 0]:
+            dataset["observations"].append(obs)
+            dataset["actions"].append(action)
+            obs, reward, term, trunc, info = env.step(action)
+            dataset["rewards"].append(reward)
+            dataset["terminals"].append(term)
+            dataset["next_observations"].append(obs)
+            print('reward:', reward)
+            print('step_num:', step_num)
+            print('term:', term)
+            if term:
+                obs, _ = env.reset()
+            # step_num+=1
+
+        # obs, reward, term, trunc, info = env.step(action)
+        # print('reward:', reward)
+        # print('step_num:', step_num)
+        # print("mouse position:", pygame.mouse.get_pos())
         step_num+=1
         # print('term:', term)
+
+    for key in dataset.keys():
+        dataset[key] = np.array(dataset[key])
+    # use numpy save the dataset
+    with open('hand_dataset.npy', 'wb') as f:
+        pickle.dump(dataset, f)
 
     # Quit Pygame
     pygame.quit()
