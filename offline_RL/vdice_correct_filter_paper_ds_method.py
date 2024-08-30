@@ -989,10 +989,21 @@ def create_dataset(config: TrainConfig):
                                 goal_radius=0.8,
                                 env_name=config.env_name,
                                 reward_type=config.reward_type)
-    dataset = np.load("dataset/uniform/uniform_dataset.npy", allow_pickle=True)
+    dataset = np.load("dataset.npy", allow_pickle=True)
+    # dataset = np.load("3midwall_dataset.npy", allow_pickle=True)
     # import pdb; pdb.set_trace()
-    expert_dataset = np.load("dataset/uniform/expert_dataset.npy", allow_pickle=True)
+    expert_dataset = np.load("PointMassEnv/EmptyRoom/uniform/expert_dataset.npy", allow_pickle=True)
     
+    # dataset["rewards"][dataset["rewards"] == -10] = 0
+    # import pdb; pdb.set_trace()
+
+    # dataset["observations"] = np.append(dataset["observations"], expert_dataset["observations"][:80], axis=0)
+    # dataset["actions"] = np.append(dataset["actions"], expert_dataset["actions"][:80], axis=0)
+    # dataset["next_observations"] = np.append(dataset["next_observations"], expert_dataset["next_observations"][:80], axis=0)
+    # dataset["rewards"] = np.append(dataset["rewards"], expert_dataset["rewards"][:80], axis=0)
+    # dataset["terminals"] = np.append(dataset["terminals"], expert_dataset["terminals"][:80], axis=0)
+
+
     if config.percent_expert > 0:
         dataset = modify_dataset(dataset, expert_dataset)
 
@@ -1138,7 +1149,7 @@ def draw_traj(weights, dataset, env, save_path=None, trajectories=None, values=N
     weights = weights[weights > 0]
 
     # TODO
-    weights = weights > 0
+    # weights = weights > 0
     # import pdb; pdb.set_trace()
     # selected_traj_img = env.get_env_frame_with_selected_traj(obs=selected_obs, 
     #                                                         next_obs=selected_next_obs,
@@ -1199,6 +1210,7 @@ def train():
     t = 0
 
     sample_size = min(2000, len(expert_dataset["observations"]))
+    # sample_size = len(expert_dataset["observations"])
     temp_expert_dataset = {}
     temp_expert_dataset["observations"] = expert_dataset["observations"][:sample_size]
     temp_expert_dataset["actions"] = expert_dataset["actions"][:sample_size]
@@ -1206,7 +1218,7 @@ def train():
     temp_expert_dataset["next_observations"] = expert_dataset["next_observations"][:sample_size]
     temp_expert_dataset["terminals"] = expert_dataset["terminals"][:sample_size]
 
-    sample_size = min(2000, len(dataset["observations"]))
+    sample_size = len(dataset["observations"])
     temp_dataset = {}
     temp_dataset["observations"] = dataset["observations"][:sample_size]
     temp_dataset["actions"] = dataset["actions"][:sample_size]

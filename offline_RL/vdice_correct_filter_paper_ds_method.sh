@@ -4,8 +4,8 @@
 env_1="antmaze-umaze-v2"
 env_2="antmaze-umaze-v2"
 conda_env="corl_0"
-project="un_dataset"
-checkpoints_path_base="un_dataset"
+project="midwall_reproduce"
+checkpoints_path_base="midwall_reproduce"
 
 env_name="EmptyRoom"
 discrete_action="True"
@@ -20,22 +20,25 @@ discount_values=(0.99)
 # semi_dice_lambda_values=(0.7)
 # true_dice_alpha_values=(0.5)
 
-semi_dice_lambda_values=(0.4 0.5 0.6 0.7)
+semi_dice_lambda_values=(0.55 0.575 0.6 0.625)
+# semi_dice_lambda_values=(0.6 0.625 0.65 0.675)
+# semi_dice_lambda_values=(0.5 0.525 0.55 0.575)
 true_dice_alpha_values=(1.25)
-semi_q_alpha_values=(1.0)
+semi_q_alpha_values=(0.5 0.75 1.0 1.25)
 
 percent_expert="0"
 
-eval_freq="5000"
-save_freq="5000"
+eval_freq="15000"
+save_freq="15000"
 
-batch_size_values=(64 128 256)
+# batch_size_values=(64 128 256)
+batch_size_values=(64)
 hidden_dim_values=(256)
 
 
 seed=(19990526)
 GPUS=(0 1 2 3)
-# GPUS=(3)
+# GPUS=(1 2 3)
 
 # Initialize an experiment counter
 experiment_counter=0
@@ -56,7 +59,7 @@ for normalize_reward in "${normalize_reward_values[@]}"; do
                 # Construct the session name based on parameters
                 session_name="${project}"
                 # append discount
-                session_name="${session_name}_discount_${discount}"
+                # session_name="${session_name}_discount_${discount}"
                 # # append normalize_reward
                 # session_name="${session_name}_normalize_reward_${normalize_reward}"
                 # # append true_dice_alpha
@@ -72,11 +75,11 @@ for normalize_reward in "${normalize_reward_values[@]}"; do
                 # # append save_freq
                 # session_name="${session_name}_save_freq_${save_freq}"
                 # append batch_size
-                session_name="${session_name}_batch_size_${batch_size}"
+                # session_name="${session_name}_batch_size_${batch_size}"
                 # # append hidden_dim
                 # session_name="${session_name}_hidden_dim_${hidden_dim}"
-                # # append semi_q_alpha
-                # session_name="${session_name}_semi_q_alpha_${semi_q_alpha}"
+                # append semi_q_alpha
+                session_name="${session_name}_semi_q_alpha_${semi_q_alpha}"
 
                 session_name="${session_name//./_}" # Replace dots with underscores
 
