@@ -43,6 +43,7 @@ class PointMassEnv(gym.Env[np.ndarray, Union[int, np.ndarray]]):
                 num_substeps=50,
                 goal_radius=0.8,
                 episode_length=60,
+                terminate_on_wall: bool = False,
                 ):
         """
         Args:
@@ -67,6 +68,7 @@ class PointMassEnv(gym.Env[np.ndarray, Union[int, np.ndarray]]):
         self._num_substeps = num_substeps
         self._goal_radius = goal_radius
         self._episode_length = episode_length
+        self._terminate_on_wall = terminate_on_wall
         self.render_mode = 'rgb_array'
 
         ## start position
@@ -152,10 +154,20 @@ class PointMassEnv(gym.Env[np.ndarray, Union[int, np.ndarray]]):
 
         # TODO: we can give penalty for hitting the wall (valid = False)
         reward = self.reward(self.state)
-        term = trunc = self.check_success(self.state) or self.epi_length >= self._episode_length or not valid
         if not valid:
-            reward = -10
-        return self._get_obs(), reward, term, trunc, {'success': self.check_success(self.state), 'valid': valid}
+            reward = -10  # keep your penalty if you want
+
+        done_success = self.check_success(self.state)
+        done_time = self.epi_length >= self._episode_length
+        done_wall = (not valid) and self._terminate_on_wall
+
+        term = done_success or done_wall
+        trunc = done_time
+
+        return self._get_obs(), reward, term, trunc, {
+            'success': done_success,
+            'valid': valid
+        }
 
     def render(self):
         return self.get_env_frame(self.state, self._goal)
