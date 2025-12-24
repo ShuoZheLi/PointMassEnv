@@ -6,6 +6,7 @@ checkpoints_path_base="discrete_FourRooms"
 env_names=("FourRooms")
 reward_type="dense"
 discrete_action="True"
+terminate_on_wall=True
 
 seeds=(100)
 GPUS=(1)
@@ -35,8 +36,8 @@ for env_name in "${env_names[@]}"; do
         tmux new-session -d -s $session_name
 
         # Activate the conda environment
-        tmux send-keys -t $session_name "source /data/shuozhe/miniconda3/bin/activate $conda_env" C-m
-        # tmux send-keys -t $session_name "conda activate $conda_env" C-m
+        # tmux send-keys -t $session_name "source /data/shuozhe/miniconda3/bin/activate $conda_env" C-m
+        tmux send-keys -t $session_name "conda activate $conda_env" C-m
 
         # Start the experiment with the specified parameters
         tmux send-keys -t $session_name "CUDA_VISIBLE_DEVICES=$device \
@@ -44,6 +45,7 @@ for env_name in "${env_names[@]}"; do
                                         --env_name $env_name \
                                         --reward_type $reward_type \
                                         --discrete_action $discrete_action \
+                                        --terminate_on_wall $terminate_on_wall \
                                         --save_model True \
                                         --checkpoints_path $checkpoints_path \
                                         --wandb_project_name $project \

@@ -69,17 +69,19 @@ class Args:
 
     env_name: str = "FourRooms"
     reward_type: str = "sparse"
+    terminate_on_wall: bool = True
     discrete_action: bool = False
     checkpoints_path: str = "checkpoints"
 
 
-def make_env(env_id, seed, idx, capture_video, run_name, env_name="FourRooms", reward_type="sparse"):
+def make_env(env_id, seed, idx, capture_video, run_name, env_name="FourRooms", reward_type="sparse", terminate_on_wall=True):
     def thunk():
         if capture_video and idx == 0:
             env = PointMassEnv(start=np.array([12.5, 4.5], dtype=np.float32), 
                                goal=np.array([4.5, 12.5], dtype=np.float32), 
                                goal_radius=0.8,
                                env_name=env_name,
+                               terminate_on_wall=terminate_on_wall,
                                reward_type=reward_type)
             env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
         else:
@@ -87,6 +89,7 @@ def make_env(env_id, seed, idx, capture_video, run_name, env_name="FourRooms", r
                                goal=np.array([4.5, 12.5], dtype=np.float32), 
                                goal_radius=0.8,
                                env_name=env_name,
+                               terminate_on_wall=terminate_on_wall,
                                reward_type=reward_type)
         env = gym.wrappers.RecordEpisodeStatistics(env)
         env.action_space.seed(seed)
@@ -166,6 +169,7 @@ def eval_policy(actor, global_step, gif_dir):
                                goal=np.array([4.5, 12.5], dtype=np.float32), 
                                goal_radius=0.8,
                                env_name=args.env_name,
+                               terminate_on_wall=args.terminate_on_wall,
                                reward_type=args.reward_type)
     
     actor.eval()
@@ -261,6 +265,7 @@ poetry run pip install "stable_baselines3==2.0.0a1"
                                               capture_video=args.capture_video, 
                                               run_name=run_name,
                                               env_name=args.env_name,
+                                              terminate_on_wall=args.terminate_on_wall,
                                               reward_type=args.reward_type)])
     assert isinstance(envs.single_action_space, gym.spaces.Box), "only continuous action space is supported"
 
