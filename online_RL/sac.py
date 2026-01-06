@@ -18,6 +18,12 @@ from PointMassEnv import PointMassEnv
 import imageio
 
 
+def parse_vec2(s: str) -> np.ndarray:
+    s = s.strip().replace("[", "").replace("]", "").replace("(", "").replace(")", "")
+    x, y = [float(v) for v in s.split(",")]
+    return np.array([x, y], dtype=np.float32)
+
+
 @dataclass
 class Args:
     exp_name: str = os.path.basename(__file__)[: -len(".py")]
@@ -36,6 +42,13 @@ class Args:
     """the entity (team) of wandb's project"""
     capture_video: bool = False
     """whether to capture videos of the agent performances (check out `videos` folder)"""
+
+    start: str = "12.5,4.5"
+    """start position for the PointMassEnv as CSV 'x,y'"""
+    goal: str = "4.5,12.5"
+    """goal position for the PointMassEnv as CSV 'x,y'"""
+    goal_radius: float = 0.8
+    """goal radius for success condition"""
 
     # Algorithm specific arguments
     env_id: str = "Hopper-v4"
@@ -74,23 +87,18 @@ class Args:
     checkpoints_path: str = "checkpoints"
 
 
-def make_env(env_id, seed, idx, capture_video, run_name, env_name="FourRooms", reward_type="sparse", terminate_on_wall=True):
+def make_env(env_id, seed, idx, capture_video, run_name, env_name="FourRooms", reward_type="sparse", terminate_on_wall=True, start=None, goal=None, goal_radius=0.8):
     def thunk():
+        env = PointMassEnv(
+            start=start,
+            goal=goal,
+            goal_radius=goal_radius,
+            env_name=env_name,
+            terminate_on_wall=terminate_on_wall,
+            reward_type=reward_type,
+        )
         if capture_video and idx == 0:
-            env = PointMassEnv(start=np.array([12.5, 4.5], dtype=np.float32), 
-                               goal=np.array([4.5, 12.5], dtype=np.float32), 
-                               goal_radius=0.8,
-                               env_name=env_name,
-                               terminate_on_wall=terminate_on_wall,
-                               reward_type=reward_type)
             env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
-        else:
-            env = PointMassEnv(start=np.array([12.5, 4.5], dtype=np.float32), 
-                               goal=np.array([4.5, 12.5], dtype=np.float32), 
-                               goal_radius=0.8,
-                               env_name=env_name,
-                               terminate_on_wall=terminate_on_wall,
-                               reward_type=reward_type)
         env = gym.wrappers.RecordEpisodeStatistics(env)
         env.action_space.seed(seed)
         return env
@@ -165,12 +173,12 @@ class Actor(nn.Module):
 
 
 def eval_policy(actor, global_step, gif_dir):
-    env = PointMassEnv(start=np.array([12.5, 4.5], dtype=np.float32), 
-                               goal=np.array([4.5, 12.5], dtype=np.float32), 
-                               goal_radius=0.8,
-                               env_name=args.env_name,
-                               terminate_on_wall=args.terminate_on_wall,
-                               reward_type=args.reward_type)
+    env = PointMassEnv(start=start_np,
+                       goal=goal_np,
+                       goal_radius=args.goal_radius,
+                       env_name=args.env_name,
+                       terminate_on_wall=args.terminate_on_wall,
+                       reward_type=args.reward_type)
     
     actor.eval()
     images = []
@@ -178,17 +186,23 @@ def eval_policy(actor, global_step, gif_dir):
     for i in range(1):
         episode_return = 0.0
         episode_length = 0
-        done = False
         obs, _ = env.reset()
         images.append(np.moveaxis(np.transpose(env.render()), 0, -1))
+        terminated = False
+        truncated = False
+        done = False
         while not done:
             with torch.no_grad():
                 action, log_prob, mean = actor.get_action(torch.Tensor([obs]).to(device))
-            obs, reward, done, trunc, info = env.step(mean[0].cpu().numpy())
+            obs, reward, terminated, truncated, info = env.step(mean[0].cpu().numpy())
             images.append(np.moveaxis(np.transpose(env.render()), 0, -1))
             episode_return += reward
             episode_length += 1
-            if done and info["success"]:
+
+            done = bool(terminated or truncated)
+
+            # count success only on true termination (goal reached)
+            if terminated and info.get("success", False):
                 count_success += 1
     
     actor.train()
@@ -227,6 +241,8 @@ poetry run pip install "stable_baselines3==2.0.0a1"
         )
 
     args = pyrallis.parse(config_class=Args)
+    start_np = parse_vec2(args.start)
+    goal_np = parse_vec2(args.goal)
     run_name = args.checkpoints_path
     if args.track:
         import wandb
@@ -266,7 +282,10 @@ poetry run pip install "stable_baselines3==2.0.0a1"
                                               run_name=run_name,
                                               env_name=args.env_name,
                                               terminate_on_wall=args.terminate_on_wall,
-                                              reward_type=args.reward_type)])
+                                              reward_type=args.reward_type,
+                                              start=start_np,
+                                              goal=goal_np,
+                                              goal_radius=args.goal_radius)])
     assert isinstance(envs.single_action_space, gym.spaces.Box), "only continuous action space is supported"
 
     
@@ -401,7 +420,7 @@ poetry run pip install "stable_baselines3==2.0.0a1"
                 if args.autotune:
                     writer.add_scalar("losses/alpha_loss", alpha_loss.item(), global_step)
 
-        if global_step % 10000 == 0:
+        if global_step > 0 and global_step % 10000 == 0:
             eval_policy(actor, global_step, gif_dir)
             if args.save_model:
                 actor.save(model_dir + "/"+str(global_step)+"_actor.pth")

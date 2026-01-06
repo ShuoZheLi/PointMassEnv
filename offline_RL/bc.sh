@@ -1,0 +1,10 @@
+python3 offline_RL/bc_new.py \
+  --dataset_path /media/shuozhe/Disk_Bottom_4TB/pointmas_grpo/hand_dataset.npy \
+  --env_name GuidanceCorridorMaze \
+  --start "2.5,14.5" \
+  --goal "14.5,2.5" \
+  --discretize_eval True \
+  --epochs 500 \
+  --batch_size 64 \
+  --lr 3e-4 \
+#   --save_path bc_policy.pth

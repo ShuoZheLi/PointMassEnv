@@ -143,4 +143,132 @@ WALLS = {
                     (8, 5, 9, 12),      # middle mid wall
                     (8, 13, 9, 16),     # middle right wall
                 ]),
+
+            # ------------------------------------------------------------
+            # New maze for "repair (SFT) + stitch-to-goal (RL)" demonstration
+            # ------------------------------------------------------------
+            # Updated: green regions -> empty (0), yellow region -> walls (1)
+            "GuidanceCorridorMaze": np.array(
+                [
+                    [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+                    [1,0,0,0,0,1,0,1,0,0,0,1,0,0,0,0,1],
+                    [1,0,0,0,0,1,0,1,0,0,0,1,0,0,0,0,1],
+                    [1,0,0,0,0,1,0,1,1,0,1,1,0,0,0,0,1],
+                    [1,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,1],
+                    [1,0,0,0,0,0,0,1,1,0,0,1,0,0,0,0,1],
+                    [1,0,0,0,0,1,0,0,0,0,0,1,0,0,0,0,1],
+                    [1,1,1,1,1,1,1,1,1,0,1,1,1,1,0,1,1],
+                    [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+                    [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+                    [1,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1],
+                    [1,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1],
+                    [1,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1],
+                    [1,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1],
+                    [1,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1],
+                    [1,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1],
+                    [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+                ],
+                dtype=np.int32,
+            ),
+
+            # This bounds array matches the grid EXACTLY (outer border + internal rectangles).
+            # "GuidanceCorridorMazeBounds": np.array(
+            #         [
+            #             # --- Outer Borders ---
+            #             (0, 0, 17, 1),    # Left Wall (Rows 0-17, Col 0)
+            #             (0, 16, 17, 17),  # Right Wall (Rows 0-17, Col 16)
+            #             (0, 0, 1, 17),    # Top Wall (Row 0, Cols 0-17)
+            #             (16, 0, 17, 17),  # Bottom Wall (Row 16, Cols 0-17)
+
+            #             # --- Middle Barrier (Row 7) ---
+            #             # Grid logic: Walls at indices 0-8, Gap at 9, Walls at 10-13, Gap at 14, Walls at 15-16
+            #             # Format: (RowStart, ColStart, RowEnd, ColEnd)
+            #             (7, 0, 8, 9),     # Wall Left of door (Cols 0 to 9 exclusive)
+            #             (7, 10, 8, 14),   # Wall Middle segment (Cols 10 to 14 exclusive)
+            #             (7, 15, 8, 17),   # Wall Right segment (Cols 15 to 17 exclusive)
+
+            #             # # --- Upper Maze Internal Walls (Rows 1-6) ---
+            #             # # Based on the numpy array provided
+            #             (1, 5, 4, 6),     # Vertical Wall @ Col 5 (Rows 1-3)
+            #             (1, 7, 4, 8),     # Vertical Wall @ Col 7 (Rows 1-3)
+            #             (3, 8, 4, 9),     # Single block @ Row 3, Col 8
+            #             (3, 10, 4, 11),   # Single block @ Row 3, Col 10
+            #             (1, 11, 4, 12),   # Vertical Wall @ Col 11 (Rows 1-3)
+
+            #             (7, 6, 8, 7), 
+            #             # --- Upper Maze Internal Walls (Rows 1-6) ---
+            #             # (1, 5, 4, 6),     # Vertical Wall @ Col 5 (Rows 1-6)
+            #             # (1, 7, 4, 8),     # Vertical Wall @ Col 7 (Rows 1-3)
+            #             # (3, 8, 4, 10),    # Horizontal block @ Row 3, Cols 8-9
+            #             # (3, 10, 4, 11),   # Single block @ Row 3, Col 10
+            #             # (1, 11, 7, 12),   # Vertical Wall @ Col 11-12 (Rows 1-6)
+                        
+            #             # Row 5 obstacles
+            #             (5, 7, 6, 9),     # Horizontal block @ Row 5, Cols 7-8
+            #             (5, 11, 6, 12),   # Single block @ Row 5, Col 11
+
+            #             # --- Lower Maze Internal Walls (Rows 8-15) ---
+            #             # Based on the large blocks of 1s in the bottom half
+                        
+            #             # Row 10: Walls at Cols 10-16
+            #             (10, 10, 11, 17),
+                        
+            #             # Rows 11-14: Walls at Cols 6-16 (The large solid block)
+            #             (11, 6, 15, 17),
+
+            #             # Row 15: Walls at Cols 10-16
+            #             (15, 10, 16, 17),
+            #         ],
+            #         dtype=np.int32,
+            #     ),
+
+        "GuidanceCorridorMazeBounds": np.array(
+            [
+                # --- Outer Borders ---
+                (0, 0, 17, 1),    # Left
+                (0, 16, 17, 17),  # Right
+                (0, 0, 1, 17),    # Top
+                (16, 0, 17, 17),  # Bottom
+
+                # --- Middle Barrier (Row 7) ---
+                (7, 0, 8, 9),     # Cols 0-8
+                (7, 10, 8, 14),   # Cols 10-13
+                (7, 15, 8, 17),   # Cols 15-16
+
+                # --- Upper Maze Internal Walls (Rows 1-6) ---
+                (1, 5, 4, 6),     # Col 5, rows 1-3
+                (1, 7, 4, 8),     # Col 7, rows 1-3
+                (3, 8, 4, 9),     # (3,8)
+                (3, 10, 4, 11),   # (3,10)
+
+                # FIX: col 11 is a continuous vertical wall rows 1-6
+                (1, 11, 7, 12),   # Col 11, rows 1-6
+
+                # Row 5 obstacles
+                (5, 7, 6, 9),     # Row 5, cols 7-8
+
+                # FIX: single wall cell at (6,5)
+                (6, 5, 7, 6),     # (6,5)
+
+                # --- Lower Maze Internal Walls (Rows 8-15) ---
+                (10, 10, 11, 17), # Row 10, cols 10-16
+                (11, 6, 15, 17),  # Rows 11-14, cols 6-16
+                (15, 10, 16, 17), # Row 15, cols 10-16
+            ],
+            dtype=np.int32,
+        ),
 }
+
+def check_bounds_match_grid(grid, bounds):
+    cov = np.zeros_like(grid, dtype=np.int32)
+    for r0, c0, r1, c1 in bounds:
+        cov[r0:r1, c0:c1] = 1
+
+    missing = np.argwhere((grid == 1) & (cov == 0))
+    extra   = np.argwhere((grid == 0) & (cov == 1))
+
+    return missing, extra
+
+missing, extra = check_bounds_match_grid(WALLS["GuidanceCorridorMaze"], WALLS["GuidanceCorridorMazeBounds"])
+print("missing wall cells:", missing.tolist())
+print("extra covered cells:", extra.tolist())

@@ -1,12 +1,16 @@
 #!/bin/bash
 conda_env="corl_0"
 
-project="discrete_FourRooms"
-checkpoints_path_base="discrete_FourRooms"
-env_names=("FourRooms")
+project="discrete_GuidanceCorridorMaze"
+checkpoints_path_base="discrete_GuidanceCorridorMaze"
+env_names=("GuidanceCorridorMaze")
 reward_type="dense"
 discrete_action="True"
-terminate_on_wall=True
+terminate_on_wall=False
+# start="12.5,4.5"
+# goal="4.5,12.5"
+start="2.5,14.5"
+goal="14.5,2.5"
 
 seeds=(100)
 GPUS=(1)
@@ -43,6 +47,8 @@ for env_name in "${env_names[@]}"; do
         tmux send-keys -t $session_name "CUDA_VISIBLE_DEVICES=$device \
                                         python3 online_RL/sac.py \
                                         --env_name $env_name \
+                                        --start $start \
+                                        --goal $goal \
                                         --reward_type $reward_type \
                                         --discrete_action $discrete_action \
                                         --terminate_on_wall $terminate_on_wall \

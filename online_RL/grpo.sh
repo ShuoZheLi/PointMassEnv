@@ -1,11 +1,16 @@
 #!/bin/bash
 conda_env="corl_0"
 
-project="discrete_FourRooms_grpo"
-checkpoints_path_base="discrete_FourRooms_grpo"
-env_names=("FourRooms")
-reward_type="sparse"
+project="discrete_GuidanceCorridorMaze_GRPO"
+checkpoints_path_base="discrete_GuidanceCorridorMaze_GRPO"
+env_names=("GuidanceCorridorMaze")
+reward_type="dense"
 discrete_action="True"
+terminate_on_wall=True
+
+start="2.5,14.5"
+goal="14.5,2.5"
+goal_radius=0.8
 
 seeds=(100)
 GPUS=(1)
@@ -51,9 +56,13 @@ for env_name in "${env_names[@]}"; do
     tmux send-keys -t $session_name "CUDA_VISIBLE_DEVICES=$device \
       python3 online_RL/grpo.py \
       --env_name $env_name \
+      --start $start \
+      --goal $goal \
+      --goal_radius $goal_radius \
       --episode_length $episode_length \
       --reward_type $reward_type \
       --discrete_action $discrete_action \
+      --terminate_on_wall $terminate_on_wall \
       --save_model True \
       --checkpoints_path $checkpoints_path \
       --wandb_project_name $project \

@@ -2,18 +2,17 @@
 # GRPO (Group Relative Policy Optimization) for PointMassEnv continuous actions
 # with numerical stabilizations to prevent NaNs.
 #
-# UPDATED (ported from your GRPO+SFT version, EXCLUDING SFT loss + SFT logging):
-# 1) Accepts --start / --goal / --goal_radius from CLI and uses them everywhere (train env + eval env).
-# 2) Logs per-update train success rate (success AND valid at episode end).
-# 3) Logs advantage statistics + histogram.
-# 4) Same eval GIF saving behavior.
+# UPDATED:
+# 1) Adds SFT / behavior cloning term (weighted) using dataset like "hand_dataset.npy".
+# 2) Accepts --start / --goal / --goal_radius from CLI and uses them everywhere (train env + eval env).
+# 3) Adds linear annealing for SFT weight during training via flags (UPDATE-BASED).
 
 import os, sys
 import random
 import time
 from dataclasses import dataclass
 from copy import deepcopy
-from typing import List, Tuple
+from typing import List, Tuple, Dict, Any
 
 import gymnasium as gym
 import numpy as np
@@ -27,6 +26,7 @@ from torch.utils.tensorboard import SummaryWriter
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from PointMassEnv import PointMassEnv
 import imageio
+import pickle
 
 
 # -----------------------------
@@ -36,6 +36,40 @@ def parse_vec2(s: str) -> np.ndarray:
     s = s.strip().replace("[", "").replace("]", "").replace("(", "").replace(")", "")
     x, y = [float(v) for v in s.split(",")]
     return np.array([x, y], dtype=np.float32)
+
+
+# -----------------------------
+# Dataset loading (pickled dict saved as .npy in your collector)
+# -----------------------------
+def load_hand_dataset(dataset_path: str) -> Dict[str, Any]:
+    """
+    Expected: a dict with keys:
+      observations: (N,2)
+      actions: (N,2)
+      ...
+    Your collector saves via pickle into a .npy filename.
+    """
+    try:
+        with open(dataset_path, "rb") as f:
+            data = pickle.load(f)
+        if isinstance(data, dict) and "observations" in data and "actions" in data:
+            return data
+    except Exception as e:
+        print(f"[SFT] pickle load failed for {dataset_path}: {e}")
+
+    try:
+        obj = np.load(dataset_path, allow_pickle=True)
+        if isinstance(obj, np.ndarray) and obj.shape == () and isinstance(obj.item(), dict):
+            data = obj.item()
+            if "observations" in data and "actions" in data:
+                return data
+    except Exception as e:
+        print(f"[SFT] np.load fallback failed for {dataset_path}: {e}")
+
+    raise RuntimeError(
+        f"[SFT] Could not load dataset from {dataset_path}. "
+        f"Expected a pickled dict or an np.load-able dict with keys 'observations' and 'actions'."
+    )
 
 
 # -----------------------------
@@ -74,6 +108,7 @@ class Args:
     y_clip: float = 1.0 - 1e-5
     logdet_eps: float = 1e-5
 
+    # model / run
     save_model: bool = False
     checkpoints_path: str = "checkpoints"
 
@@ -83,11 +118,40 @@ class Args:
     discrete_action: bool = False
     episode_length: int = 120
 
-    # NEW: start/goal from CLI (strings)
+    # start/goal from CLI (strings)
     start: str = "12.5,4.5"
     goal: str = "4.5,12.5"
     goal_radius: float = 0.8
-    terminate_on_wall: bool = False
+
+    # -----------------------------
+    # SFT / Behavior Cloning
+    # -----------------------------
+    sft_weight: float = 0.0
+    sft_dataset_path: str = "hand_dataset.npy"
+    sft_minibatch_size: int = 2048
+
+    # UPDATE-BASED annealing:
+    # Linear schedule: weight goes from sft_weight -> sft_weight_end over sft_anneal_updates POLICY UPDATES.
+    # If sft_anneal_updates <= 0, weight stays constant at sft_weight.
+    sft_weight_end: float = 0.0
+    sft_anneal_updates: int = 0
+
+
+# -----------------------------
+# SFT weight schedule (UPDATE-BASED)
+# -----------------------------
+def get_sft_weight(args: Args, update_i0: int) -> float:
+    """
+    update_i0: 0-indexed update counter (0 for the 1st actual update).
+    """
+    w0 = float(args.sft_weight)
+    w1 = float(args.sft_weight_end)
+    U = int(args.sft_anneal_updates)
+    if U <= 0:
+        return w0
+    t = float(update_i0) / float(U)
+    t = 0.0 if t < 0.0 else (1.0 if t > 1.0 else t)
+    return (1.0 - t) * w0 + t * w1
 
 
 def make_env(
@@ -101,7 +165,6 @@ def make_env(
     start: np.ndarray,
     goal: np.ndarray,
     goal_radius: float,
-    terminate_on_wall: bool = False,
 ):
     def thunk():
         env = PointMassEnv(
@@ -111,14 +174,12 @@ def make_env(
             env_name=env_name,
             reward_type=reward_type,
             episode_length=episode_length,
-            terminate_on_wall=terminate_on_wall,
         )
         if capture_video and idx == 0:
             env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
         env = gym.wrappers.RecordEpisodeStatistics(env)
         env.action_space.seed(seed)
         return env
-
     return thunk
 
 
@@ -223,19 +284,6 @@ def has_bad_params(model: nn.Module) -> bool:
     return False
 
 
-def _is_success(info: object) -> bool:
-    """
-    Training success definition: success AND valid at episode end.
-    If 'valid' is missing, fall back to 'success' only.
-    """
-    if not isinstance(info, dict):
-        return False
-    s = bool(info.get("success", False))
-    if "valid" in info:
-        return s and bool(info.get("valid", False))
-    return s
-
-
 def eval_policy(
     actor: Actor,
     global_step: int,
@@ -252,7 +300,6 @@ def eval_policy(
         env_name=args.env_name,
         reward_type=args.reward_type,
         episode_length=args.episode_length,
-        terminate_on_wall=args.terminate_on_wall,
     )
 
     actor.eval()
@@ -279,7 +326,7 @@ def eval_policy(
         images.append(np.moveaxis(np.transpose(env.render()), 0, -1))
         ep_ret += float(reward)
         ep_len += 1
-        if done and _is_success(info):
+        if done and isinstance(info, dict) and info.get("success", False):
             count_success += 1
 
     actor.train()
@@ -290,7 +337,6 @@ def eval_policy(
 
     if args.track:
         import wandb
-
         wandb.log({"policy_performance": wandb.Video(gif_path, fps=10, format="gif")})
 
     print(f"[eval] step={global_step} return={ep_ret:.2f} len={ep_len} success_rate={count_success/1.0:.2f}")
@@ -305,18 +351,10 @@ def collect_group(
     device: torch.device,
     args: Args,
 ) -> Tuple[List[float], List[List[Tuple[np.ndarray, np.ndarray, float]]], int, List[float]]:
-    """
-    Collect G rollouts from the same initial state by resetting with the same seed.
-    Returns:
-      returns: list of discounted returns per rollout
-      trajs: list of trajectories; each traj is list of (obs, stored_action, logp_old)
-      steps: total env steps
-      successes: list of {0.0,1.0} per rollout (episode-level)
-    """
-    returns: List[float] = []
-    trajs: List[List[Tuple[np.ndarray, np.ndarray, float]]] = []
+    returns = []
+    trajs = []
     total_steps = 0
-    successes: List[float] = []
+    successes = []
 
     for _ in range(group_size):
         obs, _ = env.reset(seed=group_seed)
@@ -324,7 +362,7 @@ def collect_group(
         t = 0
         disc = 1.0
         ret = 0.0
-        traj: List[Tuple[np.ndarray, np.ndarray, float]] = []
+        traj = []
         ep_success = 0.0
 
         while not done and t < args.max_episode_steps:
@@ -337,7 +375,6 @@ def collect_group(
             if args.discrete_action:
                 exec_a = discrete_action_fn(exec_a)[0].astype(np.float32)
 
-            # Store EXECUTED action; compute logp_old at executed action (stability)
             exec_a_t = torch.tensor(exec_a, dtype=torch.float32, device=device).unsqueeze(0)
             with torch.no_grad():
                 logp_old = policy_old.log_prob(obs_t, exec_a_t, args.y_clip, args.logdet_eps).cpu().item()
@@ -345,8 +382,9 @@ def collect_group(
             next_obs, reward, terminated, truncated, info = env.step(exec_a)
             done = terminated or truncated
 
-            if done and _is_success(info):
-                ep_success = 1.0
+            if done and isinstance(info, dict):
+                if bool(info.get("success", False)) and bool(info.get("valid", False)):
+                    ep_success = 1.0
 
             traj.append((obs.astype(np.float32), exec_a.astype(np.float32), float(logp_old)))
 
@@ -370,13 +408,11 @@ if __name__ == "__main__":
     args = pyrallis.parse(config_class=Args)
     run_name = args.checkpoints_path
 
-    # Parse start/goal once (used everywhere)
     start_np = parse_vec2(args.start)
     goal_np = parse_vec2(args.goal)
 
     if args.track:
         import wandb
-
         wandb.init(
             project=args.wandb_project_name,
             entity=args.wandb_entity,
@@ -387,14 +423,13 @@ if __name__ == "__main__":
             save_code=True,
         )
 
-    log_dir = f"grpo/{run_name}"
+    log_dir = f"grpo_sft_anneal/{run_name}"
     writer = SummaryWriter(log_dir)
     gif_dir = os.path.join(log_dir, "gifs")
     model_dir = os.path.join(log_dir, "models")
     os.makedirs(gif_dir, exist_ok=True)
     os.makedirs(model_dir, exist_ok=True)
 
-    # Seeding
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -413,7 +448,6 @@ if __name__ == "__main__":
         start=start_np,
         goal=goal_np,
         goal_radius=args.goal_radius,
-        terminate_on_wall=args.terminate_on_wall,
     )()
 
     assert isinstance(env.action_space, gym.spaces.Box), "Only continuous action space supported here."
@@ -421,18 +455,50 @@ if __name__ == "__main__":
     actor = Actor(env).to(device)
     optimizer = optim.Adam(actor.parameters(), lr=args.learning_rate)
 
-    # Frozen reference policy (init snapshot)
     ref_actor = deepcopy(actor).to(device)
     ref_actor.eval()
     for p in ref_actor.parameters():
         p.requires_grad_(False)
 
+    # Load SFT dataset (once)
+    sft_enabled = (args.sft_weight > 0.0) or (args.sft_weight_end > 0.0)
+    sft_obs_t = None
+    sft_act_t = None
+    sft_N = 0
+
+    if sft_enabled:
+        data = load_hand_dataset(args.sft_dataset_path)
+        obs_np = np.asarray(data["observations"], dtype=np.float32)
+        act_np = np.asarray(data["actions"], dtype=np.float32)
+
+        if obs_np.ndim != 2 or obs_np.shape[1] != 2:
+            raise ValueError(f"[SFT] Expected observations shape (N,2), got {obs_np.shape}")
+        if act_np.ndim != 2 or act_np.shape[1] != 2:
+            raise ValueError(f"[SFT] Expected actions shape (N,2), got {act_np.shape}")
+
+        if args.discrete_action:
+            act_np = discrete_action_fn(act_np).astype(np.float32)
+
+        sft_obs_t = torch.tensor(obs_np, dtype=torch.float32, device=torch.device("cpu"))
+        sft_act_t = torch.tensor(act_np, dtype=torch.float32, device=torch.device("cpu"))
+        sft_N = obs_np.shape[0]
+
+        print(
+            f"[SFT] enabled: path={args.sft_dataset_path} N={sft_N} "
+            f"sft_weight={args.sft_weight} -> {args.sft_weight_end} over {args.sft_anneal_updates} updates "
+            f"sft_mb={args.sft_minibatch_size}"
+        )
+        writer.add_scalar("sft/weight_init", float(args.sft_weight), 0)
+        writer.add_scalar("sft/weight_end", float(args.sft_weight_end), 0)
+        writer.add_scalar("sft/anneal_updates", float(args.sft_anneal_updates), 0)
+        writer.add_scalar("sft/dataset_N", float(sft_N), 0)
+
     start_time = time.time()
     global_step = 0
-    update_idx = 0
+    update_idx = 0  # counts ACTUAL successful updates
 
     while global_step < args.total_timesteps:
-        update_idx += 1
+        # NOTE: don't increment update_idx until we know we actually have data (update_steps>0)
 
         old_actor = deepcopy(actor).to(device)
         old_actor.eval()
@@ -446,11 +512,13 @@ if __name__ == "__main__":
 
         batch_steps = 0
         batch_group_stats = []
-        batch_successes: List[float] = []
+        batch_successes = []
 
-        # Collect groups
+        # Use a "proposed" update number for seeding (so seeds still advance even if a rare empty batch happens)
+        proposed_update_num = update_idx + 1
+
         for g in range(args.groups_per_update):
-            group_seed = args.seed + update_idx * 10_000 + g
+            group_seed = args.seed + proposed_update_num * 10_000 + g
             returns, trajs, steps, successes = collect_group(env, old_actor, group_seed, args.group_size, device, args)
             batch_successes.extend(successes)
 
@@ -478,12 +546,19 @@ if __name__ == "__main__":
         if update_steps == 0:
             continue
 
+        # Now we confirm this is a real update
+        update_idx += 1
+
         obs_t = torch.tensor(np.stack(obs_buf), dtype=torch.float32, device=device)
         act_t = torch.tensor(np.stack(act_buf), dtype=torch.float32, device=device)
         logp_old_t = torch.tensor(np.array(logp_old_buf), dtype=torch.float32, device=device)
         adv_t = torch.tensor(np.array(adv_buf), dtype=torch.float32, device=device)
 
-        # Advantage stats (logged once per update)
+        # UPDATE-BASED: first update uses update_i0=0
+        cur_sft_weight = get_sft_weight(args, update_idx - 1)
+        if sft_enabled:
+            writer.add_scalar("sft/current_weight", float(cur_sft_weight), global_step)
+
         with torch.no_grad():
             adv_mean = float(adv_t.mean().detach().cpu().item())
             adv_std = float(adv_t.std(unbiased=False).detach().cpu().item())
@@ -491,16 +566,15 @@ if __name__ == "__main__":
             adv_max = float(adv_t.max().detach().cpu().item())
             adv_abs_mean = float(adv_t.abs().mean().detach().cpu().item())
 
-        # Reference logprob for KL (no grad)
         with torch.no_grad():
             logp_ref_t = ref_actor.log_prob(obs_t, act_t, args.y_clip, args.logdet_eps)
 
-        # Optimize
         actor.train()
         inds = np.arange(update_steps)
 
         last_policy_loss = 0.0
         last_kl = 0.0
+        last_sft_nll = 0.0
 
         for epoch in range(args.update_epochs):
             np.random.shuffle(inds)
@@ -527,7 +601,20 @@ if __name__ == "__main__":
                 ratio_ref = torch.exp(log_ratio_ref)
                 kl = (ratio_ref - log_ratio_ref - 1.0).mean()
 
-                loss = -(clipped_obj - args.kl_beta * kl)
+                sft_obj = torch.tensor(0.0, device=device)
+                if sft_enabled and sft_N > 0 and cur_sft_weight > 0.0:
+                    sft_bs = min(args.sft_minibatch_size, sft_N)
+                    sft_idx = np.random.randint(0, sft_N, size=sft_bs)
+                    sft_obs_mb = sft_obs_t[sft_idx].to(device)
+                    sft_act_mb = sft_act_t[sft_idx].to(device)
+
+                    sft_logp = actor.log_prob(sft_obs_mb, sft_act_mb, args.y_clip, args.logdet_eps)
+                    if not (torch.isnan(sft_logp).any() or torch.isinf(sft_logp).any()):
+                        sft_obj = sft_logp.mean()
+
+                objective = clipped_obj + (cur_sft_weight * sft_obj) - (args.kl_beta * kl)
+                loss = -objective
+
                 if torch.isnan(loss) or torch.isinf(loss):
                     continue
 
@@ -542,13 +629,16 @@ if __name__ == "__main__":
 
                 last_policy_loss = float((-clipped_obj).detach().cpu().item())
                 last_kl = float(kl.detach().cpu().item())
+                if sft_enabled:
+                    last_sft_nll = float((-(sft_obj.detach())).cpu().item())
 
-        # Logging
         sps = int(global_step / (time.time() - start_time + 1e-8))
         writer.add_scalar("charts/SPS", sps, global_step)
         writer.add_scalar("charts/batch_steps", batch_steps, global_step)
         writer.add_scalar("losses/policy_loss", last_policy_loss, global_step)
         writer.add_scalar("losses/kl_est", last_kl, global_step)
+        if sft_enabled:
+            writer.add_scalar("losses/sft_nll", last_sft_nll, global_step)
 
         if len(batch_group_stats) > 0:
             writer.add_scalar("charts/group_return_mean", float(np.mean([x[0] for x in batch_group_stats])), global_step)
@@ -565,24 +655,21 @@ if __name__ == "__main__":
         writer.add_scalar("advantages/min", adv_min, global_step)
         writer.add_scalar("advantages/max", adv_max, global_step)
         writer.add_scalar("advantages/abs_mean", adv_abs_mean, global_step)
-
-        # Optional distribution view (can gate with `if update_idx % 10 == 0:` if you want)
         writer.add_histogram("advantages/adv", adv_t.detach().cpu(), global_step)
 
         print(
             f"[update {update_idx}] step={global_step} batch_steps={batch_steps} "
-            f"policy_loss={last_policy_loss:.4f} kl={last_kl:.4f} "
+            f"policy_loss={last_policy_loss:.4f} kl={last_kl:.4f} sft_nll={last_sft_nll:.4f} "
+            f"sft_w={cur_sft_weight:.6f} "
             f"train_succ={train_success_rate:.3f} "
             f"adv_mean={adv_mean:+.3f} adv_std={adv_std:.3f} adv_min={adv_min:+.3f} adv_max={adv_max:+.3f} "
             f"SPS={sps}"
         )
 
-        # Eval / save
         if global_step % 10_000 < batch_steps:
             eval_ret, eval_len = eval_policy(actor, global_step, gif_dir, args, device, start_np, goal_np)
             writer.add_scalar("eval/return", eval_ret, global_step)
             writer.add_scalar("eval/length", eval_len, global_step)
-
             if args.save_model:
                 actor.save(os.path.join(model_dir, f"{global_step}_actor.pth"))
 

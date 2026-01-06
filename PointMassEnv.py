@@ -155,7 +155,8 @@ class PointMassEnv(gym.Env[np.ndarray, Union[int, np.ndarray]]):
         # TODO: we can give penalty for hitting the wall (valid = False)
         reward = self.reward(self.state)
         if not valid:
-            reward = -10  # keep your penalty if you want
+            # reward = -10  # keep your penalty if you want
+            reward = 0
 
         done_success = self.check_success(self.state)
         done_time = self.epi_length >= self._episode_length
@@ -275,13 +276,16 @@ if __name__ == '__main__':
     screen = pygame.display.set_mode((width, height))
     pygame.display.set_caption('PointMassEnv Game')
     
-    start_pos = [[12.5, 4.5]]
-    goal = [[4.5, 12.5]]
+    # start_pos = [[12.5, 4.5]]
+    # goal = [[4.5, 12.5]]
+    start_pos = [[2.5,14.5]]
+    goal = [[14.5,2.5]]
 
-    env = PointMassEnv(start=np.array([12.5, 4.5], dtype=np.float32), 
-                                goal=np.array([4.5, 12.5], dtype=np.float32), 
+    env = PointMassEnv(start=np.array([2.5, 14.5], dtype=np.float32), 
+                                goal=np.array([14.5, 2.5], dtype=np.float32), 
                                 goal_radius=0.8,
-                                env_name="EmptyRoom",
+                                # env_name="EmptyRoom",
+                                env_name="GuidanceCorridorMaze",
                                 reward_type="sparse")
     
     # env._goal = np.array(goal[-1], dtype=np.float32)
