@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 """
-Behavior Cloning (BC) training that mirrors your SAC script style:
-- TensorBoard logging
-- (Optional) wandb tracking
-- Periodic rollout evaluation that SAVES A GIF (and logs it to wandb)
-- Periodic model checkpoint saving
-- Same start/goal/env args as SAC
+Behavior Cloning (BC) training that is CHECKPOINT-COMPATIBLE with your collector.
+
+Key compatibility changes vs your current bc.py:
+1) Train an Actor that matches the collector's Actor architecture:
+   - fc1, fc2, fc_mean, fc_logstd
+   - buffers: action_scale, action_bias
+   - checkpoint key "actor" is now loadable by build_actor_from_ckpt(...)
+
+2) Include collector-relevant fields in ckpt["config"]:
+   episode_length, discrete_action, y_clip, logdet_eps, max_episode_steps
 
 Run example:
   python3 online_RL/bc.py \
@@ -16,6 +20,8 @@ Run example:
     --reward_type sparse \
     --terminate_on_wall False \
     --discretize_eval True \
+    --episode_length 200 \
+    --max_episode_steps 512 \
     --epochs 200 \
     --eval_every_epochs 10 \
     --save_model True \
@@ -27,6 +33,7 @@ import os, sys
 import math
 import random
 import pickle
+import time
 from dataclasses import dataclass
 
 import numpy as np
@@ -41,6 +48,9 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from PointMassEnv import PointMassEnv
 
 
+# -----------------------------
+# Utils
+# -----------------------------
 def parse_vec2(s: str) -> np.ndarray:
     s = s.strip().replace("[", "").replace("]", "").replace("(", "").replace(")", "")
     x, y = [float(v) for v in s.split(",")]
@@ -56,7 +66,7 @@ def set_seed(seed: int, torch_deterministic: bool = True):
 
 
 def load_dataset(dataset_path: str) -> dict:
-    # Your format: pickle.dump(dict, f) into .npy file
+    # First try pickle (your collector writes pickle)
     try:
         with open(dataset_path, "rb") as f:
             data = pickle.load(f)
@@ -65,7 +75,7 @@ def load_dataset(dataset_path: str) -> dict:
     except Exception as e:
         print(f"[load_dataset] pickle load failed: {e}")
 
-    # fallback for other formats
+    # Fallback: numpy object that contains a dict
     try:
         obj = np.load(dataset_path, allow_pickle=True)
         if isinstance(obj, np.ndarray) and obj.shape == () and isinstance(obj.item(), dict):
@@ -75,12 +85,12 @@ def load_dataset(dataset_path: str) -> dict:
     except Exception as e:
         print(f"[load_dataset] np.load fallback failed: {e}")
 
-    raise RuntimeError(f"Could not load dataset from {dataset_path} (expected pickled dict).")
+    raise RuntimeError(f"Could not load dataset from {dataset_path} (expected pickled dict or npy-dict).")
 
 
 def discretize_action_np(action: np.ndarray) -> np.ndarray:
     """
-    Convert continuous action to {-1,0,1} using the same thresholds you used in SAC.
+    Convert continuous action to {-1,0,1} with thresholds +/-0.5.
     action: (2,) or (N,2)
     """
     a = np.array(action, dtype=np.float32, copy=True)
@@ -117,25 +127,65 @@ class BCDataset(torch.utils.data.Dataset):
         return self.obs[idx], self.acts[idx]
 
 
-class BCPolicy(nn.Module):
-    """MLP: s(2) -> a(2) in [-1,1] via tanh"""
-    def __init__(self, obs_dim=2, act_dim=2, hidden=256):
+# -----------------------------
+# Actor = EXACTLY compatible with your collector
+# -----------------------------
+LOG_STD_MAX = 2
+LOG_STD_MIN = -5
+
+
+def to_np(x):
+    return np.asarray(x, dtype=np.float32)
+
+
+class Actor(nn.Module):
+    def __init__(self, obs_dim: int, act_dim: int, act_low: np.ndarray, act_high: np.ndarray, hidden_dim: int = 256):
         super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(obs_dim, hidden),
-            nn.ReLU(),
-            nn.Linear(hidden, hidden),
-            nn.ReLU(),
-            nn.Linear(hidden, act_dim),
-        )
+        self.obs_dim = int(obs_dim)
+        self.act_dim = int(act_dim)
+        self.hidden_dim = int(hidden_dim)
 
-    def forward(self, obs):
-        return torch.tanh(self.net(obs))
+        self.fc1 = nn.Linear(self.obs_dim, self.hidden_dim)
+        self.fc2 = nn.Linear(self.hidden_dim, self.hidden_dim)
+        self.fc_mean = nn.Linear(self.hidden_dim, self.act_dim)
+        self.fc_logstd = nn.Linear(self.hidden_dim, self.act_dim)
+
+        act_low = to_np(act_low).reshape(-1)
+        act_high = to_np(act_high).reshape(-1)
+        if act_low.shape[0] != self.act_dim or act_high.shape[0] != self.act_dim:
+            raise ValueError(f"act_low/high must be shape ({self.act_dim},), got {act_low.shape} {act_high.shape}")
+
+        action_scale = (act_high - act_low) / 2.0
+        action_bias = (act_high + act_low) / 2.0
+        self.register_buffer("action_scale", torch.tensor(action_scale, dtype=torch.float32))
+        self.register_buffer("action_bias", torch.tensor(action_bias, dtype=torch.float32))
+
+    def forward(self, x: torch.Tensor):
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        mean = self.fc_mean(x)
+        log_std = self.fc_logstd(x)
+        log_std = torch.tanh(log_std)
+        log_std = LOG_STD_MIN + 0.5 * (LOG_STD_MAX - LOG_STD_MIN) * (log_std + 1)
+        return mean, log_std
+
+    # Differentiable deterministic action (for BC loss)
+    def deterministic_action(self, obs: torch.Tensor) -> torch.Tensor:
+        mean, _ = self(obs)
+        y = torch.tanh(mean)
+        return y * self.action_scale + self.action_bias
+
+    # Inference helper (no_grad)
+    @torch.no_grad()
+    def deterministic(self, obs: torch.Tensor) -> torch.Tensor:
+        return self.deterministic_action(obs)
 
 
+# -----------------------------
+# Args
+# -----------------------------
 @dataclass
 class Args:
-    # tracking/logging (match SAC vibe)
     seed: int = 1
     torch_deterministic: bool = True
     cuda: bool = True
@@ -156,7 +206,18 @@ class Args:
     env_name: str = "GuidanceCorridorMaze"
     reward_type: str = "sparse"
     terminate_on_wall: bool = False
+
+    # IMPORTANT: this controls whether rollout uses discretized {-1,0,1} moves.
     discretize_eval: bool = True
+
+    # Add these so collector can reuse them from ckpt["config"]
+    episode_length: int = 200
+    max_episode_steps: int = 512   # rollout safety cap (also used by collector)
+    y_clip: float = 1.0 - 1e-5
+    logdet_eps: float = 1e-5
+
+    # Collector expects "discrete_action" in config; we mirror discretize_eval into it at runtime.
+    discrete_action: bool = True
 
     start: str = "2.5,14.5"
     goal: str = "14.5,2.5"
@@ -172,11 +233,10 @@ class Args:
     # evaluation cadence (gif)
     eval_every_epochs: int = 10
     eval_episodes: int = 1
-    max_steps: int = 5000  # hard safety cap for rollout loop
 
 
 @torch.no_grad()
-def eval_on_dataset(policy: nn.Module, loader, device, discretize: bool):
+def eval_on_dataset(policy: Actor, loader, device, discretize: bool):
     policy.eval()
     total_mse = 0.0
     total_n = 0
@@ -186,7 +246,8 @@ def eval_on_dataset(policy: nn.Module, loader, device, discretize: bool):
     for obs, act in loader:
         obs = obs.to(device)
         act = act.to(device)
-        pred = policy(obs)
+
+        pred = policy.deterministic(obs)
 
         total_mse += F.mse_loss(pred, act, reduction="sum").item()
         total_n += obs.shape[0]
@@ -206,7 +267,7 @@ def eval_on_dataset(policy: nn.Module, loader, device, discretize: bool):
 
 @torch.no_grad()
 def rollout_and_save_gif(
-    policy: nn.Module,
+    policy: Actor,
     device,
     args: Args,
     start_np: np.ndarray,
@@ -220,6 +281,7 @@ def rollout_and_save_gif(
         env_name=args.env_name,
         terminate_on_wall=args.terminate_on_wall,
         reward_type=args.reward_type,
+        episode_length=int(args.episode_length),
     )
 
     policy.eval()
@@ -228,27 +290,24 @@ def rollout_and_save_gif(
 
     for _ in range(args.eval_episodes):
         obs, _ = env.reset()
-        # match your SAC gif frame formatting
         images.append(np.moveaxis(np.transpose(env.render()), 0, -1))
 
-        ep_ret = 0.0
         ep_len = 0
         done = False
 
-        while not done and ep_len < args.max_steps:
+        while not done and ep_len < int(args.max_episode_steps):
             obs_t = torch.tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
-            act = policy(obs_t).squeeze(0).detach().cpu().numpy()
+            act = policy.deterministic(obs_t).squeeze(0).detach().cpu().numpy()
 
             if args.discretize_eval:
                 act = discretize_action_np(act)
 
             obs, reward, terminated, truncated, info = env.step(act)
             images.append(np.moveaxis(np.transpose(env.render()), 0, -1))
-            ep_ret += float(reward)
             ep_len += 1
             done = bool(terminated or truncated)
 
-            if terminated and info.get("success", False):
+            if terminated and isinstance(info, dict) and info.get("success", False):
                 count_success += 1
 
     os.makedirs(os.path.dirname(gif_path), exist_ok=True)
@@ -262,10 +321,13 @@ def rollout_and_save_gif(
 def main():
     args = pyrallis.parse(config_class=Args)
 
+    # Mirror rollout discretization into the config field the collector expects.
+    args.discrete_action = bool(args.discretize_eval)
+
     set_seed(args.seed, args.torch_deterministic)
     device = torch.device("cuda" if (torch.cuda.is_available() and args.cuda) else "cpu")
 
-    # --- run naming / dirs (like SAC) ---
+    # --- dirs ---
     run_name = args.checkpoints_path
     writer = SummaryWriter(f"bc/{run_name}")
     gif_dir = f"bc/{run_name}/gifs"
@@ -291,10 +353,16 @@ def main():
     obs = np.asarray(data["observations"], dtype=np.float32)
     acts = np.asarray(data["actions"], dtype=np.float32)
 
-    if obs.ndim != 2 or obs.shape[1] != 2:
-        raise ValueError(f"Expected observations shape (N,2), got {obs.shape}")
-    if acts.ndim != 2 or acts.shape[1] != 2:
-        raise ValueError(f"Expected actions shape (N,2), got {acts.shape}")
+    if obs.ndim != 2:
+        raise ValueError(f"Expected observations shape (N,obs_dim), got {obs.shape}")
+    if acts.ndim != 2:
+        raise ValueError(f"Expected actions shape (N,act_dim), got {acts.shape}")
+    if obs.shape[0] != acts.shape[0]:
+        raise ValueError(f"obs/actions length mismatch: {obs.shape[0]} vs {acts.shape[0]}")
+
+    # quick sanity print
+    print(f"[data] obs: shape={obs.shape}, min={obs.min(axis=0)}, max={obs.max(axis=0)}")
+    print(f"[data] act: shape={acts.shape}, min={acts.min(axis=0)}, max={acts.max(axis=0)}")
 
     N = obs.shape[0]
     rng = np.random.RandomState(args.seed)
@@ -311,15 +379,52 @@ def main():
     print(f"[device] {device}")
     print(f"[data] N={N} train={len(train_ds)} val={len(val_ds)}")
 
-    # --- model / opt ---
-    policy = BCPolicy(obs_dim=2, act_dim=2, hidden=args.hidden).to(device)
-    opt = torch.optim.Adam(policy.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-
     start_np = parse_vec2(args.start)
     goal_np = parse_vec2(args.goal)
 
+    # derive policy_spec from env instance (dims + bounds)
+    tmp_env = PointMassEnv(
+        start=start_np,
+        goal=goal_np,
+        goal_radius=args.goal_radius,
+        env_name=args.env_name,
+        terminate_on_wall=args.terminate_on_wall,
+        reward_type=args.reward_type,
+        episode_length=int(args.episode_length),
+    )
+    obs_dim = int(np.array(tmp_env.observation_space.shape).prod())
+    act_dim = int(np.prod(tmp_env.action_space.shape))
+    act_low = np.asarray(tmp_env.action_space.low, dtype=np.float32).reshape(-1)
+    act_high = np.asarray(tmp_env.action_space.high, dtype=np.float32).reshape(-1)
+    tmp_env.close()
+
+    # Ensure dataset dims match env dims (prevents silent mismatch)
+    if obs.shape[1] != obs_dim:
+        raise ValueError(f"Dataset obs_dim={obs.shape[1]} but env obs_dim={obs_dim}")
+    if acts.shape[1] != act_dim:
+        raise ValueError(f"Dataset act_dim={acts.shape[1]} but env act_dim={act_dim}")
+
+    policy_spec = {
+        "obs_dim": int(obs_dim),
+        "act_dim": int(act_dim),
+        "hidden_dim": int(args.hidden),
+        "act_low": act_low,
+        "act_high": act_high,
+    }
+
+    # --- model / opt (Actor compatible with collector) ---
+    policy = Actor(
+        obs_dim=policy_spec["obs_dim"],
+        act_dim=policy_spec["act_dim"],
+        act_low=policy_spec["act_low"],
+        act_high=policy_spec["act_high"],
+        hidden_dim=args.hidden,
+    ).to(device)
+
+    opt = torch.optim.Adam(policy.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+
     # --- training loop ---
-    global_step = 0  # counts gradient steps (nice for TB)
+    global_step = 0
     for epoch in range(1, args.epochs + 1):
         policy.train()
         running = 0.0
@@ -329,10 +434,11 @@ def main():
             ob_b = ob_b.to(device)
             ac_b = ac_b.to(device)
 
-            pred = policy(ob_b)
+            # BC loss on deterministic action (DIFFERENTIABLE)
+            pred = policy.deterministic_action(ob_b)
             loss = F.mse_loss(pred, ac_b)
 
-            opt.zero_grad()
+            opt.zero_grad(set_to_none=True)
             loss.backward()
             opt.step()
 
@@ -343,27 +449,24 @@ def main():
         train_mse = running / max(1, seen)
         val_mse, val_acc = eval_on_dataset(policy, val_loader, device, discretize=args.discretize_eval)
 
-        # tensorboard
         writer.add_scalar("losses/train_mse", train_mse, epoch)
         writer.add_scalar("losses/val_mse", val_mse, epoch)
         if val_acc is not None:
             writer.add_scalar("metrics/val_discrete_match", val_acc, epoch)
 
-        # wandb
         if wandb is not None:
             log_dict = {"train_mse": train_mse, "val_mse": val_mse, "epoch": epoch}
             if val_acc is not None:
                 log_dict["val_discrete_match"] = val_acc
             wandb.log(log_dict, step=epoch)
 
-        # print occasionally
         if epoch == 1 or epoch % 5 == 0 or epoch == args.epochs:
             msg = f"[epoch {epoch:03d}] train_mse={train_mse:.6f} val_mse={val_mse:.6f}"
             if val_acc is not None:
                 msg += f" val_discrete_match={val_acc*100:.2f}%"
             print(msg)
 
-        # --- periodic rollout GIF eval (SAC-style) ---
+        # --- periodic rollout GIF eval ---
         if args.eval_every_epochs > 0 and (epoch % args.eval_every_epochs == 0):
             gif_path = os.path.join(gif_dir, f"{epoch}.gif")
             stats = rollout_and_save_gif(policy, device, args, start_np, goal_np, gif_path)
@@ -380,23 +483,48 @@ def main():
                 )
             print(f"[eval] epoch={epoch} success_rate={stats['success_rate']:.3f} gif={gif_path}")
 
-        # --- periodic checkpoint ---
+        # --- periodic checkpoint (collector-compatible) ---
         if args.save_model and args.save_every_epochs > 0 and (epoch % args.save_every_epochs == 0):
             ckpt_path = os.path.join(model_dir, f"{epoch}_bc_policy.pth")
-            torch.save(
-                {
-                    "state_dict": policy.state_dict(),
-                    "args": vars(args),
-                    "epoch": epoch,
+            payload = {
+                "version": "bc_pointmass_ckpt_v2_actor_compatible",
+                "time": time.time(),
+                "config": vars(args),  # includes episode_length, discrete_action, y_clip, logdet_eps, max_episode_steps
+                "policy_spec": {
+                    "obs_dim": int(policy_spec["obs_dim"]),
+                    "act_dim": int(policy_spec["act_dim"]),
+                    "hidden_dim": int(policy_spec.get("hidden_dim", args.hidden)),
+                    "act_low": np.asarray(policy_spec["act_low"], dtype=np.float32),
+                    "act_high": np.asarray(policy_spec["act_high"], dtype=np.float32),
                 },
-                ckpt_path,
-            )
+                "actor": policy.state_dict(),          # <-- matches collector Actor
+                "optimizer": opt.state_dict(),
+                "global_step": int(global_step),
+                "epoch": int(epoch),
+            }
+            torch.save(payload, ckpt_path)
             print(f"[saved] {ckpt_path}")
 
     # final save
     if args.save_model:
         final_path = os.path.join(model_dir, "final_bc_policy.pth")
-        torch.save({"state_dict": policy.state_dict(), "args": vars(args), "epoch": args.epochs}, final_path)
+        payload = {
+            "version": "bc_pointmass_ckpt_v2_actor_compatible",
+            "time": time.time(),
+            "config": vars(args),
+            "policy_spec": {
+                "obs_dim": int(policy_spec["obs_dim"]),
+                "act_dim": int(policy_spec["act_dim"]),
+                "hidden_dim": int(policy_spec.get("hidden_dim", args.hidden)),
+                "act_low": np.asarray(policy_spec["act_low"], dtype=np.float32),
+                "act_high": np.asarray(policy_spec["act_high"], dtype=np.float32),
+            },
+            "actor": policy.state_dict(),
+            "optimizer": opt.state_dict(),
+            "global_step": int(global_step),
+            "epoch": int(args.epochs),
+        }
+        torch.save(payload, final_path)
         print(f"[saved] {final_path}")
 
     writer.close()

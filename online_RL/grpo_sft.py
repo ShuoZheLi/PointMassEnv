@@ -2,17 +2,30 @@
 # GRPO (Group Relative Policy Optimization) for PointMassEnv continuous actions
 # with numerical stabilizations to prevent NaNs.
 #
-# UPDATED:
-# 1) Adds SFT / behavior cloning term (weighted) using dataset like "hand_dataset.npy".
-# 2) Accepts --start / --goal / --goal_radius from CLI and uses them everywhere (train env + eval env).
-# 3) Adds linear annealing for SFT weight during training via flags (UPDATE-BASED).
+# Plug-and-play checkpointing update:
+# - Saves a SINGLE .pt checkpoint that contains:
+#   (1) actor weights, (2) ref_actor weights, (3) optimizer (optional),
+#   (4) full config (Args as dict), (5) policy spec (obs_dim / act_dim / act_low / act_high),
+#   (6) training counters (global_step/update_idx), and (7) RNG states (optional).
+# - Adds "load_policy(...)" helper so others can do:
+#       from grpo import load_policy
+#       policy = load_policy("checkpoint.pt", device="cuda")
+#       action = policy(obs, deterministic=True)
+# - Adds CLI flags: --load_path, --resume, --eval_only, --use_ckpt_config
+#
+# Notes:
+# - The Actor is refactored to be constructible from a saved "policy_spec" WITHOUT an env object.
+# - For RESUME TRAINING with KL-to-ref, we also store and restore ref_actor.
+# - If your checkpoint is from an older version that only saved actor.state_dict(),
+#   you can still load it by setting --use_ckpt_config False and providing matching env args,
+#   but you won’t have ref_actor/optimizer unless present.
 
 import os, sys
 import random
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from copy import deepcopy
-from typing import List, Tuple, Dict, Any
+from typing import List, Tuple, Dict, Any, Optional
 
 import gymnasium as gym
 import numpy as np
@@ -24,7 +37,8 @@ import pyrallis
 from torch.utils.tensorboard import SummaryWriter
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from PointMassEnv import PointMassEnv
+from PointMassEnv import PointMassEnv  # noqa: E402
+
 import imageio
 import pickle
 
@@ -36,6 +50,14 @@ def parse_vec2(s: str) -> np.ndarray:
     s = s.strip().replace("[", "").replace("]", "").replace("(", "").replace(")", "")
     x, y = [float(v) for v in s.split(",")]
     return np.array([x, y], dtype=np.float32)
+
+
+def ensure_dir(path: str) -> None:
+    os.makedirs(path, exist_ok=True)
+
+
+def to_np(x: Any) -> np.ndarray:
+    return np.asarray(x, dtype=np.float32)
 
 
 # -----------------------------
@@ -94,7 +116,7 @@ class Args:
     learning_rate: float = 1e-4
     clip_coef: float = 0.2
     kl_beta: float = 0.02
-    update_epochs: int = 4
+    update_epochs: int = 1
     minibatch_size: int = 2048
     max_grad_norm: float = 1.0
 
@@ -108,9 +130,25 @@ class Args:
     y_clip: float = 1.0 - 1e-5
     logdet_eps: float = 1e-5
 
-    # model / run
-    save_model: bool = False
+    # run / logging
+    # (kept for backward compatibility: you used this as run name)
     checkpoints_path: str = "checkpoints"
+
+    # checkpointing
+    save_checkpoints: bool = True
+    checkpoint_every_steps: int = 10_000  # 0 disables periodic saves
+    save_best: bool = True  # saves best eval return checkpoint as best.pt
+
+    # loading / resuming
+    load_path: str = ""      # path to a .pt checkpoint to load
+    resume: bool = False     # if True, restores optimizer + counters + RNG
+    eval_only: bool = False  # if True, just run eval and exit
+    use_ckpt_config: bool = True  # if True, override Args (env+hyperparams) from checkpoint config
+
+    # ref actor loading behavior (only used if checkpoint is missing ref_actor):
+    # "from_ckpt" (default): load ref if present, else fallback to "reset_to_actor"
+    # "reset_to_actor": set ref_actor = deepcopy(actor) after loading actor
+    ref_mode: str = "from_ckpt"
 
     # env
     env_name: str = "FourRooms"
@@ -123,6 +161,11 @@ class Args:
     goal: str = "4.5,12.5"
     goal_radius: float = 0.8
 
+    # eval
+    eval_episodes: int = 1
+    eval_deterministic: bool = True
+    save_gifs: bool = True
+
     # -----------------------------
     # SFT / Behavior Cloning
     # -----------------------------
@@ -131,8 +174,6 @@ class Args:
     sft_minibatch_size: int = 2048
 
     # UPDATE-BASED annealing:
-    # Linear schedule: weight goes from sft_weight -> sft_weight_end over sft_anneal_updates POLICY UPDATES.
-    # If sft_anneal_updates <= 0, weight stays constant at sft_weight.
     sft_weight_end: float = 0.0
     sft_anneal_updates: int = 0
 
@@ -183,8 +224,26 @@ def make_env(
     return thunk
 
 
+def infer_policy_spec_from_env(env: gym.Env) -> Dict[str, Any]:
+    if not isinstance(env.action_space, gym.spaces.Box):
+        raise TypeError("Only gym.spaces.Box action spaces are supported in this script.")
+    obs_dim = int(np.array(env.observation_space.shape).prod())
+    act_dim = int(np.prod(env.action_space.shape))
+    act_low = to_np(env.action_space.low).reshape(-1)
+    act_high = to_np(env.action_space.high).reshape(-1)
+    if act_low.shape[0] != act_dim or act_high.shape[0] != act_dim:
+        raise ValueError("Action space low/high shapes do not match act_dim.")
+    return {
+        "obs_dim": obs_dim,
+        "act_dim": act_dim,
+        "act_low": act_low,
+        "act_high": act_high,
+        "hidden_dim": 256,
+    }
+
+
 # -----------------------------
-# Actor (Squashed Gaussian)
+# Actor (Squashed Gaussian) -- now env-free constructible
 # -----------------------------
 LOG_STD_MAX = 2
 LOG_STD_MIN = -5
@@ -195,23 +254,36 @@ def atanh(x: torch.Tensor) -> torch.Tensor:
 
 
 class Actor(nn.Module):
-    def __init__(self, env: gym.Env):
+    def __init__(self, obs_dim: int, act_dim: int, act_low: np.ndarray, act_high: np.ndarray, hidden_dim: int = 256):
         super().__init__()
-        obs_dim = int(np.array(env.observation_space.shape).prod())
-        act_dim = int(np.prod(env.action_space.shape))
+        self.obs_dim = int(obs_dim)
+        self.act_dim = int(act_dim)
+        self.hidden_dim = int(hidden_dim)
 
-        self.fc1 = nn.Linear(obs_dim, 256)
-        self.fc2 = nn.Linear(256, 256)
-        self.fc_mean = nn.Linear(256, act_dim)
-        self.fc_logstd = nn.Linear(256, act_dim)
+        self.fc1 = nn.Linear(self.obs_dim, self.hidden_dim)
+        self.fc2 = nn.Linear(self.hidden_dim, self.hidden_dim)
+        self.fc_mean = nn.Linear(self.hidden_dim, self.act_dim)
+        self.fc_logstd = nn.Linear(self.hidden_dim, self.act_dim)
 
-        self.register_buffer(
-            "action_scale",
-            torch.tensor((env.action_space.high - env.action_space.low) / 2.0, dtype=torch.float32),
-        )
-        self.register_buffer(
-            "action_bias",
-            torch.tensor((env.action_space.high + env.action_space.low) / 2.0, dtype=torch.float32),
+        act_low = to_np(act_low).reshape(-1)
+        act_high = to_np(act_high).reshape(-1)
+        if act_low.shape[0] != self.act_dim or act_high.shape[0] != self.act_dim:
+            raise ValueError(f"act_low/high must be shape ({self.act_dim},), got {act_low.shape} {act_high.shape}")
+
+        action_scale = (act_high - act_low) / 2.0
+        action_bias = (act_high + act_low) / 2.0
+
+        self.register_buffer("action_scale", torch.tensor(action_scale, dtype=torch.float32))
+        self.register_buffer("action_bias", torch.tensor(action_bias, dtype=torch.float32))
+
+    @staticmethod
+    def from_spec(spec: Dict[str, Any]) -> "Actor":
+        return Actor(
+            obs_dim=int(spec["obs_dim"]),
+            act_dim=int(spec["act_dim"]),
+            act_low=to_np(spec["act_low"]),
+            act_high=to_np(spec["act_high"]),
+            hidden_dim=int(spec.get("hidden_dim", 256)),
         )
 
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -258,12 +330,9 @@ class Actor(nn.Module):
         log_det = torch.log(self.action_scale) + torch.log(torch.clamp(1 - y.pow(2), min=logdet_eps))
         return (logp - log_det).sum(-1)
 
-    def save(self, model_path: str):
-        torch.save(self.state_dict(), model_path)
-
 
 # -----------------------------
-# Helpers
+# Plug-and-play Policy wrapper
 # -----------------------------
 def discrete_action_fn(action: np.ndarray) -> np.ndarray:
     if action.ndim == 1:
@@ -277,6 +346,159 @@ def discrete_action_fn(action: np.ndarray) -> np.ndarray:
     return out
 
 
+class Policy:
+    """
+    A tiny wrapper that makes a loaded checkpoint "plug and play".
+
+    Example:
+        policy = load_policy("path/to/checkpoint.pt", device="cuda")
+        a = policy(obs, deterministic=True)  # obs: np.ndarray shape (obs_dim,)
+    """
+
+    def __init__(self, actor: Actor, device: torch.device, discrete_action: bool, y_clip: float, logdet_eps: float):
+        self.actor = actor
+        self.device = device
+        self.discrete_action = bool(discrete_action)
+        self.y_clip = float(y_clip)
+        self.logdet_eps = float(logdet_eps)
+        self.actor.eval()
+
+    @torch.no_grad()
+    def __call__(self, obs: np.ndarray, deterministic: bool = True) -> np.ndarray:
+        obs = to_np(obs).reshape(-1)
+        obs_t = torch.tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
+        if deterministic:
+            a_t = self.actor.deterministic(obs_t)
+        else:
+            a_t, _ = self.actor.sample(obs_t, self.y_clip, self.logdet_eps)
+        a = a_t.squeeze(0).detach().cpu().numpy().astype(np.float32)
+        if self.discrete_action:
+            a = discrete_action_fn(a)[0].astype(np.float32)
+        return a
+
+
+# -----------------------------
+# Checkpoint I/O
+# -----------------------------
+def get_rng_state() -> Dict[str, Any]:
+    state: Dict[str, Any] = {
+        "python_random": random.getstate(),
+        "numpy_random": np.random.get_state(),
+        "torch_random": torch.get_rng_state(),
+    }
+    if torch.cuda.is_available():
+        try:
+            state["torch_cuda_random"] = torch.cuda.get_rng_state_all()
+        except Exception:
+            state["torch_cuda_random"] = None
+    return state
+
+
+def set_rng_state(state: Dict[str, Any]) -> None:
+    if not state:
+        return
+    if "python_random" in state and state["python_random"] is not None:
+        random.setstate(state["python_random"])
+    if "numpy_random" in state and state["numpy_random"] is not None:
+        np.random.set_state(state["numpy_random"])
+    if "torch_random" in state and state["torch_random"] is not None:
+        torch.set_rng_state(state["torch_random"])
+    if torch.cuda.is_available() and "torch_cuda_random" in state and state["torch_cuda_random"] is not None:
+        try:
+            torch.cuda.set_rng_state_all(state["torch_cuda_random"])
+        except Exception:
+            pass
+
+
+def save_checkpoint(
+    path: str,
+    actor: Actor,
+    ref_actor: Optional[Actor],
+    optimizer: Optional[optim.Optimizer],
+    args: Args,
+    policy_spec: Dict[str, Any],
+    global_step: int,
+    env_step: int,
+    update_idx: int,
+    best_eval_return: float,
+    include_optimizer: bool = True,
+    include_rng: bool = True,
+) -> None:
+    payload: Dict[str, Any] = {
+        "version": "grpo_pointmass_ckpt_v2",
+        "time": time.time(),
+        "config": asdict(args),
+        "policy_spec": {
+            "obs_dim": int(policy_spec["obs_dim"]),
+            "act_dim": int(policy_spec["act_dim"]),
+            "hidden_dim": int(policy_spec.get("hidden_dim", 256)),
+            "act_low": to_np(policy_spec["act_low"]),
+            "act_high": to_np(policy_spec["act_high"]),
+        },
+        "actor": actor.state_dict(),
+        "ref_actor": ref_actor.state_dict() if ref_actor is not None else None,
+        "global_step": int(global_step),
+        "env_step": int(env_step),
+        "update_idx": int(update_idx),
+        "best_eval_return": float(best_eval_return),
+    }
+    if include_optimizer and optimizer is not None:
+        payload["optimizer"] = optimizer.state_dict()
+    else:
+        payload["optimizer"] = None
+
+    if include_rng:
+        payload["rng_state"] = get_rng_state()
+    else:
+        payload["rng_state"] = None
+
+    ensure_dir(os.path.dirname(path))
+    torch.save(payload, path)
+
+
+def load_checkpoint(path: str, device: torch.device) -> Dict[str, Any]:
+    ckpt = torch.load(path, map_location=device)
+    if not isinstance(ckpt, dict):
+        raise ValueError(f"Checkpoint at {path} is not a dict.")
+    return ckpt
+
+
+def load_policy(checkpoint_path: str, device: str = "cpu") -> Policy:
+    """
+    Plug-and-play loader for others.
+
+    Usage:
+        from grpo import load_policy
+        policy = load_policy(".../checkpoint.pt", device="cuda")
+        action = policy(obs, deterministic=True)
+    """
+    dev = torch.device(device)
+    ckpt = load_checkpoint(checkpoint_path, dev)
+
+    spec = ckpt.get("policy_spec", None)
+    if spec is None:
+        raise KeyError("Checkpoint missing 'policy_spec'. Cannot construct Actor without env/spec.")
+
+    # Convert act_low/high if saved as numpy arrays
+    spec = dict(spec)
+    spec["act_low"] = to_np(spec["act_low"])
+    spec["act_high"] = to_np(spec["act_high"])
+
+    actor = Actor.from_spec(spec).to(dev)
+    actor.load_state_dict(ckpt["actor"], strict=True)
+    actor.eval()
+
+    cfg = ckpt.get("config", {}) or {}
+    discrete_action = bool(cfg.get("discrete_action", False))
+    y_clip = float(cfg.get("y_clip", 1.0 - 1e-5))
+    logdet_eps = float(cfg.get("logdet_eps", 1e-5))
+
+    return Policy(actor=actor, device=dev, discrete_action=discrete_action, y_clip=y_clip, logdet_eps=logdet_eps)
+
+
+# -----------------------------
+# Helpers
+# -----------------------------
 def has_bad_params(model: nn.Module) -> bool:
     for p in model.parameters():
         if torch.isnan(p).any() or torch.isinf(p).any():
@@ -292,55 +514,95 @@ def eval_policy(
     device: torch.device,
     start_np: np.ndarray,
     goal_np: np.ndarray,
-):
-    env = PointMassEnv(
-        start=start_np,
-        goal=goal_np,
-        goal_radius=args.goal_radius,
-        env_name=args.env_name,
-        reward_type=args.reward_type,
-        episode_length=args.episode_length,
-    )
-
+    save_gif: bool = True,
+    deterministic: bool = True,
+) -> Tuple[float, int, float]:
+    """
+    Returns: (avg_return_over_eval_episodes, avg_length, success_rate)
+    """
     actor.eval()
-    images = []
-    count_success = 0
+    total_ret = 0.0
+    total_len = 0
+    total_succ = 0.0
 
-    obs, _ = env.reset()
-    images.append(np.moveaxis(np.transpose(env.render()), 0, -1))
+    for ep in range(args.eval_episodes):
+        env = PointMassEnv(
+            start=start_np,
+            goal=goal_np,
+            goal_radius=args.goal_radius,
+            env_name=args.env_name,
+            reward_type=args.reward_type,
+            episode_length=args.episode_length,
+        )
 
-    done = False
-    ep_ret = 0.0
-    ep_len = 0
+        images = []
+        obs, _ = env.reset(seed=args.seed + 12345 + ep)
 
-    while not done and ep_len < args.max_episode_steps:
-        obs_t = torch.tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
-        with torch.no_grad():
-            a = actor.deterministic(obs_t).cpu().numpy()[0]
-        exec_a = a
-        if args.discrete_action:
-            exec_a = discrete_action_fn(exec_a)[0]
+        if save_gif:
+            try:
+                images.append(np.moveaxis(np.transpose(env.render()), 0, -1))
+            except Exception:
+                images = []
 
-        obs, reward, terminated, truncated, info = env.step(exec_a)
-        done = terminated or truncated
-        images.append(np.moveaxis(np.transpose(env.render()), 0, -1))
-        ep_ret += float(reward)
-        ep_len += 1
-        if done and isinstance(info, dict) and info.get("success", False):
-            count_success += 1
+        done = False
+        ep_ret = 0.0
+        ep_len = 0
+        ep_succ = 0.0
+
+        while not done and ep_len < args.max_episode_steps:
+            obs_t = torch.tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
+            with torch.no_grad():
+                if deterministic:
+                    a = actor.deterministic(obs_t).cpu().numpy()[0]
+                else:
+                    a, _ = actor.sample(obs_t, args.y_clip, args.logdet_eps)
+                    a = a.cpu().numpy()[0]
+
+            exec_a = a.astype(np.float32)
+            if args.discrete_action:
+                exec_a = discrete_action_fn(exec_a)[0].astype(np.float32)
+
+            obs, reward, terminated, truncated, info = env.step(exec_a)
+            done = terminated or truncated
+
+            if save_gif and len(images) > 0:
+                try:
+                    images.append(np.moveaxis(np.transpose(env.render()), 0, -1))
+                except Exception:
+                    pass
+
+            ep_ret += float(reward)
+            ep_len += 1
+            if done and isinstance(info, dict) and info.get("success", False):
+                ep_succ = 1.0
+
+        env.close()
+
+        total_ret += ep_ret
+        total_len += ep_len
+        total_succ += ep_succ
+
+        if save_gif and len(images) > 0 and args.save_gifs:
+            ensure_dir(gif_dir)
+            gif_path = os.path.join(gif_dir, f"{global_step}_ep{ep}.gif")
+            try:
+                imageio.mimsave(gif_path, images, fps=10)
+                if args.track:
+                    import wandb
+                    wandb.log(
+                        {f"eval/video_ep{ep}": wandb.Video(gif_path, fps=10, format="gif")},
+                        step=global_step,
+                    )
+            except Exception as e:
+                print(f"[eval] failed to save gif: {e}")
 
     actor.train()
+    avg_ret = total_ret / float(max(1, args.eval_episodes))
+    avg_len = int(round(total_len / float(max(1, args.eval_episodes))))
+    succ_rate = total_succ / float(max(1, args.eval_episodes))
 
-    os.makedirs(gif_dir, exist_ok=True)
-    gif_path = os.path.join(gif_dir, f"{global_step}.gif")
-    imageio.mimsave(gif_path, images, fps=10)
-
-    if args.track:
-        import wandb
-        wandb.log({"policy_performance": wandb.Video(gif_path, fps=10, format="gif")})
-
-    print(f"[eval] step={global_step} return={ep_ret:.2f} len={ep_len} success_rate={count_success/1.0:.2f}")
-    return ep_ret, ep_len
+    print(f"[eval] step={global_step} avg_return={avg_ret:.2f} avg_len={avg_len} success_rate={succ_rate:.2f}")
+    return avg_ret, avg_len, succ_rate
 
 
 def collect_group(
@@ -401,6 +663,54 @@ def collect_group(
     return returns, trajs, total_steps, successes
 
 
+def merge_args_from_ckpt(args: Args, ckpt_cfg: Dict[str, Any]) -> None:
+    """
+    If args.use_ckpt_config == True, we overwrite most fields from checkpoint config,
+    but keep runtime knobs (device/logging/loading switches) from current CLI.
+    """
+    # Keep these from current CLI run:
+    keep = {
+        "cuda",
+        "track",
+        "wandb_project_name",
+        "wandb_entity",
+        "capture_video",
+        "load_path",
+        "resume",
+        "eval_only",
+        "use_ckpt_config",
+        "ref_mode",
+        "save_checkpoints",
+        "checkpoint_every_steps",
+        "save_best",
+        "eval_episodes",
+        "eval_deterministic",
+        "save_gifs",
+        "checkpoints_path",
+    }
+
+    for k, v in ckpt_cfg.items():
+        if hasattr(args, k) and (k not in keep):
+            try:
+                setattr(args, k, v)
+            except Exception:
+                pass
+
+
+def build_ref_actor(actor: Actor, ckpt: Optional[Dict[str, Any]], device: torch.device, args: Args) -> Actor:
+    if ckpt is not None and ckpt.get("ref_actor", None) is not None and args.ref_mode in {"from_ckpt", "reset_to_actor"}:
+        ref_actor = deepcopy(actor).to(device)
+        ref_actor.load_state_dict(ckpt["ref_actor"], strict=True)
+    else:
+        # fallback
+        ref_actor = deepcopy(actor).to(device)
+
+    ref_actor.eval()
+    for p in ref_actor.parameters():
+        p.requires_grad_(False)
+    return ref_actor
+
+
 # -----------------------------
 # Main
 # -----------------------------
@@ -408,35 +718,56 @@ if __name__ == "__main__":
     args = pyrallis.parse(config_class=Args)
     run_name = args.checkpoints_path
 
+    # device
+    device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
+
+    # Optional: load checkpoint first (so we can override config before creating env)
+    ckpt: Optional[Dict[str, Any]] = None
+    if args.load_path:
+        ckpt = load_checkpoint(args.load_path, device)
+        ckpt_cfg = ckpt.get("config", {}) or {}
+        if args.use_ckpt_config and isinstance(ckpt_cfg, dict):
+            merge_args_from_ckpt(args, ckpt_cfg)
+            print(f"[ckpt] using checkpoint config for env/hparams from: {args.load_path}")
+        else:
+            print(f"[ckpt] NOT using checkpoint config (use_ckpt_config=False). Loading weights only from: {args.load_path}")
+
+    # parse start/goal AFTER potential config override
     start_np = parse_vec2(args.start)
     goal_np = parse_vec2(args.goal)
 
+    # logging dirs
+    log_dir = f"grpo_sft_anneal/{run_name}"
+    gif_dir = os.path.join(log_dir, "gifs")
+    ckpt_dir = os.path.join(log_dir, "checkpoints")
+    ensure_dir(log_dir)
+    ensure_dir(gif_dir)
+    ensure_dir(ckpt_dir)
+
+    writer = None
+    if not args.eval_only:
+        writer = SummaryWriter(log_dir)
+
+    # tracking
     if args.track:
         import wandb
         wandb.init(
             project=args.wandb_project_name,
             entity=args.wandb_entity,
-            sync_tensorboard=True,
-            config=vars(args),
+            sync_tensorboard=False,
+            config=asdict(args),
             name=run_name,
             monitor_gym=True,
             save_code=True,
         )
 
-    log_dir = f"grpo_sft_anneal/{run_name}"
-    writer = SummaryWriter(log_dir)
-    gif_dir = os.path.join(log_dir, "gifs")
-    model_dir = os.path.join(log_dir, "models")
-    os.makedirs(gif_dir, exist_ok=True)
-    os.makedirs(model_dir, exist_ok=True)
-
+    # seeding
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
     torch.backends.cudnn.deterministic = args.torch_deterministic
 
-    device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
-
+    # env
     env = make_env(
         seed=args.seed,
         idx=0,
@@ -452,15 +783,87 @@ if __name__ == "__main__":
 
     assert isinstance(env.action_space, gym.spaces.Box), "Only continuous action space supported here."
 
-    actor = Actor(env).to(device)
+    # policy spec (prefer checkpoint spec if present)
+    if ckpt is not None and ckpt.get("policy_spec", None) is not None:
+        policy_spec = dict(ckpt["policy_spec"])
+        policy_spec["act_low"] = to_np(policy_spec["act_low"])
+        policy_spec["act_high"] = to_np(policy_spec["act_high"])
+    else:
+        policy_spec = infer_policy_spec_from_env(env)
+
+    # build actor
+    actor = Actor.from_spec(policy_spec).to(device)
     optimizer = optim.Adam(actor.parameters(), lr=args.learning_rate)
 
-    ref_actor = deepcopy(actor).to(device)
-    ref_actor.eval()
-    for p in ref_actor.parameters():
-        p.requires_grad_(False)
+    # counters
+    global_step = 0      # NOW: optimizer update step
+    update_idx = 0       # keep as update counter (can mirror global_step)
+    env_step = 0         # NEW: env interactions (for logging / traceability)
+    best_eval_return = -1e18
 
-    # Load SFT dataset (once)
+    if ckpt is not None:
+        if "actor" in ckpt and ckpt["actor"] is not None:
+            actor.load_state_dict(ckpt["actor"], strict=True)
+            print(f"[ckpt] loaded actor from: {args.load_path}")
+        else:
+            raise KeyError("Checkpoint missing 'actor' weights.")
+
+        best_eval_return = float(ckpt.get("best_eval_return", best_eval_return))
+
+        if args.resume:
+            if ckpt.get("optimizer", None) is not None:
+                try:
+                    optimizer.load_state_dict(ckpt["optimizer"])
+                    print("[ckpt] restored optimizer state.")
+                except Exception as e:
+                    print(f"[ckpt] WARNING: failed to restore optimizer state: {e}")
+
+            ver = ckpt.get("version", "")
+
+            if ver == "grpo_pointmass_ckpt_v1":
+                # OLD checkpoints: global_step was env steps
+                env_step = int(ckpt.get("global_step", 0))
+                update_idx = int(ckpt.get("update_idx", 0))
+                global_step = update_idx  # NEW semantics: updates
+            else:
+                # NEW checkpoints: global_step is updates, env_step stored separately
+                global_step = int(ckpt.get("global_step", 0))
+                update_idx = int(ckpt.get("update_idx", global_step))
+                env_step = int(ckpt.get("env_step", 0))
+
+            rng_state = ckpt.get("rng_state", None)
+            if rng_state is not None:
+                try:
+                    set_rng_state(rng_state)
+                    print("[ckpt] restored RNG state.")
+                except Exception as e:
+                    print(f"[ckpt] WARNING: failed to restore RNG state: {e}")
+
+            print(f"[ckpt] resume=True -> global_step={global_step}, update_idx={update_idx}, env_step={env_step}")
+
+    # ref actor (important for KL-to-ref)
+    ref_actor = build_ref_actor(actor, ckpt, device, args)
+
+    # ---- eval-only path ----
+    if args.eval_only:
+        avg_ret, avg_len, succ = eval_policy(
+            actor=actor,
+            global_step=global_step,
+            gif_dir=gif_dir,
+            args=args,
+            device=device,
+            start_np=start_np,
+            goal_np=goal_np,
+            save_gif=args.save_gifs,
+            deterministic=args.eval_deterministic,
+        )
+        print(f"[eval_only] avg_return={avg_ret:.3f} avg_len={avg_len} success_rate={succ:.3f}")
+        env.close()
+        if writer is not None:
+            writer.close()
+        raise SystemExit(0)
+
+    # ---- SFT dataset load (once) ----
     sft_enabled = (args.sft_weight > 0.0) or (args.sft_weight_end > 0.0)
     sft_obs_t = None
     sft_act_t = None
@@ -471,10 +874,11 @@ if __name__ == "__main__":
         obs_np = np.asarray(data["observations"], dtype=np.float32)
         act_np = np.asarray(data["actions"], dtype=np.float32)
 
-        if obs_np.ndim != 2 or obs_np.shape[1] != 2:
-            raise ValueError(f"[SFT] Expected observations shape (N,2), got {obs_np.shape}")
-        if act_np.ndim != 2 or act_np.shape[1] != 2:
-            raise ValueError(f"[SFT] Expected actions shape (N,2), got {act_np.shape}")
+        if obs_np.ndim != 2 or obs_np.shape[1] != policy_spec["obs_dim"]:
+            # Your env has obs_dim=2; we keep this check robust for future.
+            raise ValueError(f"[SFT] Expected observations shape (N,{policy_spec['obs_dim']}), got {obs_np.shape}")
+        if act_np.ndim != 2 or act_np.shape[1] != policy_spec["act_dim"]:
+            raise ValueError(f"[SFT] Expected actions shape (N,{policy_spec['act_dim']}), got {act_np.shape}")
 
         if args.discrete_action:
             act_np = discrete_action_fn(act_np).astype(np.float32)
@@ -488,18 +892,17 @@ if __name__ == "__main__":
             f"sft_weight={args.sft_weight} -> {args.sft_weight_end} over {args.sft_anneal_updates} updates "
             f"sft_mb={args.sft_minibatch_size}"
         )
-        writer.add_scalar("sft/weight_init", float(args.sft_weight), 0)
-        writer.add_scalar("sft/weight_end", float(args.sft_weight_end), 0)
-        writer.add_scalar("sft/anneal_updates", float(args.sft_anneal_updates), 0)
-        writer.add_scalar("sft/dataset_N", float(sft_N), 0)
+        writer.add_scalar("sft/weight_init", float(args.sft_weight), global_step)
+        writer.add_scalar("sft/weight_end", float(args.sft_weight_end), global_step)
+        writer.add_scalar("sft/anneal_updates", float(args.sft_anneal_updates), global_step)
+        writer.add_scalar("sft/dataset_N", float(sft_N), global_step)
+
+    # periodic saving bookkeeping
+    last_ckpt_save_step = global_step
 
     start_time = time.time()
-    global_step = 0
-    update_idx = 0  # counts ACTUAL successful updates
 
     while global_step < args.total_timesteps:
-        # NOTE: don't increment update_idx until we know we actually have data (update_steps>0)
-
         old_actor = deepcopy(actor).to(device)
         old_actor.eval()
         for p in old_actor.parameters():
@@ -514,7 +917,6 @@ if __name__ == "__main__":
         batch_group_stats = []
         batch_successes = []
 
-        # Use a "proposed" update number for seeding (so seeds still advance even if a rare empty batch happens)
         proposed_update_num = update_idx + 1
 
         for g in range(args.groups_per_update):
@@ -538,23 +940,21 @@ if __name__ == "__main__":
                     logp_old_buf.append(lp_old)
                     adv_buf.append(adv_i)
 
-            if global_step + batch_steps >= args.total_timesteps:
-                break
+            # budget checks removed: we now count updates (global_step) and env interactions (env_step)
 
-        global_step += batch_steps
+        env_step += batch_steps
         update_steps = len(obs_buf)
         if update_steps == 0:
             continue
 
-        # Now we confirm this is a real update
         update_idx += 1
+        global_step += 1   # ONE optimizer-update step per outer loop
 
         obs_t = torch.tensor(np.stack(obs_buf), dtype=torch.float32, device=device)
         act_t = torch.tensor(np.stack(act_buf), dtype=torch.float32, device=device)
         logp_old_t = torch.tensor(np.array(logp_old_buf), dtype=torch.float32, device=device)
         adv_t = torch.tensor(np.array(adv_buf), dtype=torch.float32, device=device)
 
-        # UPDATE-BASED: first update uses update_i0=0
         cur_sft_weight = get_sft_weight(args, update_idx - 1)
         if sft_enabled:
             writer.add_scalar("sft/current_weight", float(cur_sft_weight), global_step)
@@ -578,8 +978,8 @@ if __name__ == "__main__":
 
         for epoch in range(args.update_epochs):
             np.random.shuffle(inds)
-            for start in range(0, update_steps, args.minibatch_size):
-                mb_inds = inds[start : start + args.minibatch_size]
+            for start_i in range(0, update_steps, args.minibatch_size):
+                mb_inds = inds[start_i : start_i + args.minibatch_size]
                 mb_obs = obs_t[mb_inds]
                 mb_act = act_t[mb_inds]
                 mb_logp_old = logp_old_t[mb_inds]
@@ -632,9 +1032,13 @@ if __name__ == "__main__":
                 if sft_enabled:
                     last_sft_nll = float((-(sft_obj.detach())).cpu().item())
 
-        sps = int(global_step / (time.time() - start_time + 1e-8))
-        writer.add_scalar("charts/SPS", sps, global_step)
+        ups = int(global_step / (time.time() - start_time + 1e-8))
+        env_sps = int(env_step / (time.time() - start_time + 1e-8))
+        writer.add_scalar("charts/UPS", ups, global_step)
+        writer.add_scalar("charts/env_SPS", env_sps, global_step)
         writer.add_scalar("charts/batch_steps", batch_steps, global_step)
+        writer.add_scalar("counters/env_step", env_step, global_step)
+        writer.add_scalar("counters/env_steps_per_update", float(batch_steps), global_step)
         writer.add_scalar("losses/policy_loss", last_policy_loss, global_step)
         writer.add_scalar("losses/kl_est", last_kl, global_step)
         if sft_enabled:
@@ -644,11 +1048,8 @@ if __name__ == "__main__":
             writer.add_scalar("charts/group_return_mean", float(np.mean([x[0] for x in batch_group_stats])), global_step)
             writer.add_scalar("charts/group_return_std", float(np.mean([x[1] for x in batch_group_stats])), global_step)
 
-        if len(batch_successes) > 0:
-            train_success_rate = float(np.mean(batch_successes))
-            writer.add_scalar("charts/train_success_rate", train_success_rate, global_step)
-        else:
-            train_success_rate = 0.0
+        train_success_rate = float(np.mean(batch_successes)) if len(batch_successes) > 0 else 0.0
+        writer.add_scalar("charts/train_success_rate", train_success_rate, global_step)
 
         writer.add_scalar("advantages/mean", adv_mean, global_step)
         writer.add_scalar("advantages/std", adv_std, global_step)
@@ -657,21 +1058,142 @@ if __name__ == "__main__":
         writer.add_scalar("advantages/abs_mean", adv_abs_mean, global_step)
         writer.add_histogram("advantages/adv", adv_t.detach().cpu(), global_step)
 
+        # --- DIRECT wandb logging (training) ---
+        if args.track:
+            import wandb
+            wandb.log(
+                {
+                    "charts/UPS": ups,
+                    "charts/env_SPS": env_sps,
+                    "charts/batch_steps": batch_steps,
+                    "counters/env_step": env_step,
+                    "counters/env_steps_per_update": float(batch_steps),
+
+                    "losses/policy_loss": last_policy_loss,
+                    "losses/kl_est": last_kl,
+
+                    "charts/train_success_rate": train_success_rate,
+                    "advantages/mean": adv_mean,
+                    "advantages/std": adv_std,
+                    "advantages/min": adv_min,
+                    "advantages/max": adv_max,
+                    "advantages/abs_mean": adv_abs_mean,
+                },
+                step=global_step,
+            )
+
+            if sft_enabled:
+                wandb.log(
+                    {
+                        "losses/sft_nll": last_sft_nll,
+                        "sft/current_weight": float(cur_sft_weight),
+                    },
+                    step=global_step,
+                )
+
+            if len(batch_group_stats) > 0:
+                wandb.log(
+                    {
+                        "charts/group_return_mean": float(np.mean([x[0] for x in batch_group_stats])),
+                        "charts/group_return_std": float(np.mean([x[1] for x in batch_group_stats])),
+                    },
+                    step=global_step,
+                )
+
         print(
-            f"[update {update_idx}] step={global_step} batch_steps={batch_steps} "
+            f"[update {update_idx}] update_step={global_step} env_step={env_step} batch_steps={batch_steps} "
             f"policy_loss={last_policy_loss:.4f} kl={last_kl:.4f} sft_nll={last_sft_nll:.4f} "
-            f"sft_w={cur_sft_weight:.6f} "
-            f"train_succ={train_success_rate:.3f} "
-            f"adv_mean={adv_mean:+.3f} adv_std={adv_std:.3f} adv_min={adv_min:+.3f} adv_max={adv_max:+.3f} "
-            f"SPS={sps}"
+            f"sft_w={cur_sft_weight:.6f} train_succ={train_success_rate:.3f} "
+            f"adv_mean={adv_mean:+.3f} adv_std={adv_std:.3f} adv_min={adv_min:+.3f} adv_max={adv_max:+.3f} UPS={ups} env_SPS={env_sps}"
         )
 
-        if global_step % 10_000 < batch_steps:
-            eval_ret, eval_len = eval_policy(actor, global_step, gif_dir, args, device, start_np, goal_np)
-            writer.add_scalar("eval/return", eval_ret, global_step)
-            writer.add_scalar("eval/length", eval_len, global_step)
-            if args.save_model:
-                actor.save(os.path.join(model_dir, f"{global_step}_actor.pth"))
+        # ---- periodic checkpoint save ----
+        if args.save_checkpoints and args.checkpoint_every_steps > 0:
+            if (global_step - last_ckpt_save_step) >= args.checkpoint_every_steps:
+                ckpt_path = os.path.join(ckpt_dir, f"step_{global_step}.pt")
+                save_checkpoint(
+                    path=ckpt_path,
+                    actor=actor,
+                    ref_actor=ref_actor,
+                    optimizer=optimizer,
+                    args=args,
+                    policy_spec=policy_spec,
+                    global_step=global_step,
+                    env_step=env_step,
+                    update_idx=update_idx,
+                    best_eval_return=best_eval_return,
+                    include_optimizer=True,
+                    include_rng=True,
+                )
+                last_ckpt_save_step = global_step
+                print(f"[ckpt] saved: {ckpt_path}")
+
+        # ---- eval & best checkpoint ----
+        if global_step % 5 == 0:
+            avg_ret, avg_len, succ = eval_policy(
+                actor=actor,
+                global_step=global_step,
+                gif_dir=gif_dir,
+                args=args,
+                device=device,
+                start_np=start_np,
+                goal_np=goal_np,
+                save_gif=args.save_gifs,
+                deterministic=args.eval_deterministic,
+            )
+            writer.add_scalar("eval/return", avg_ret, global_step)
+            writer.add_scalar("eval/length", avg_len, global_step)
+            writer.add_scalar("eval/success_rate", succ, global_step)
+
+            if args.track:
+                import wandb
+                wandb.log(
+                    {
+                        "eval/return": avg_ret,
+                        "eval/length": avg_len,
+                        "eval/success_rate": succ,
+                    },
+                    step=global_step,
+                )
+
+            if args.save_best and avg_ret > best_eval_return:
+                best_eval_return = float(avg_ret)
+                best_path = os.path.join(ckpt_dir, "best.pt")
+                save_checkpoint(
+                    path=best_path,
+                    actor=actor,
+                    ref_actor=ref_actor,
+                    optimizer=optimizer,
+                    args=args,
+                    policy_spec=policy_spec,
+                        global_step=global_step,
+                        env_step=env_step,
+                        update_idx=update_idx,
+                    best_eval_return=best_eval_return,
+                    include_optimizer=True,
+                    include_rng=True,
+                )
+                print(f"[ckpt] new best avg_ret={best_eval_return:.3f} saved: {best_path}")
+
+    # final save
+    if args.save_checkpoints:
+        final_path = os.path.join(ckpt_dir, "final.pt")
+        save_checkpoint(
+            path=final_path,
+            actor=actor,
+            ref_actor=ref_actor,
+            optimizer=optimizer,
+            args=args,
+            policy_spec=policy_spec,
+            global_step=global_step,
+            env_step=env_step,
+            update_idx=update_idx,
+            best_eval_return=best_eval_return,
+            include_optimizer=True,
+            include_rng=True,
+        )
+        print(f"[ckpt] saved final: {final_path}")
 
     env.close()
-    writer.close()
+    if writer is not None:
+        writer.close()

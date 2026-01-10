@@ -138,6 +138,124 @@ def get_env_frame_with_selected_traj_plt(self, start=None, goal=None, obs=None, 
 
     return img_array
 
+def get_env_frame_with_selected_traj_plt(
+    self,
+    start=None, goal=None,
+    obs=None, next_obs=None, terminals=None, actions=None,
+    trajectories=None, values=None,
+    transition_weights=None,
+    save_path=None,
+    # 你也可以把下面两个参数写死，不暴露也行
+    alpha_min: float = 0.1,
+    alpha_max: float = 1.0,
+    use_log: bool = True,
+):
+    if start is None:
+        start = self._start
+    if goal is None:
+        goal = self._goal
+
+    start = start - 0.5
+    goal = goal - 0.5
+
+    fig, ax = plt.subplots(figsize=(8, 8))
+
+    if values is not None:
+        values = np.max(values) - values
+        norm_val = Normalize(vmin=np.min(values), vmax=np.max(values))
+
+    # Draw walls / values
+    for y in range(self._walls.shape[0]):
+        for x in range(self._walls.shape[1]):
+            face_color = 'white'
+            if self._walls[y, x] == 1:
+                face_color = 'black'
+            elif values is not None:
+                face_color = hot(norm_val(values[y, x]))
+            rect = patches.Rectangle((x, y), 1, 1, linewidth=0, edgecolor='none', facecolor=face_color)
+            ax.add_patch(rect)
+
+    # Draw start / goal
+    ax.add_patch(patches.Circle((start[1] + 0.5, start[0] + 0.5), 0.5, color='blue'))
+    ax.add_patch(patches.Circle((goal[1] + 0.5, goal[0] + 0.5), 0.5, color='red'))
+
+    # --------- NEW: weights -> alpha ----------
+    n = len(obs) if obs is not None else 0
+    if transition_weights is None:
+        alphas = np.ones(n, dtype=np.float32) * alpha_max
+    else:
+        w = np.asarray(transition_weights, dtype=np.float32).reshape(-1)
+        if w.shape[0] != n:
+            raise ValueError(f"transition_weights length {w.shape[0]} != len(obs) {n}")
+
+        # 用 log 压缩一下动态范围：次数差很多时更好看
+        if use_log:
+            w = np.log1p(w)
+
+        w_min = float(np.min(w)) if n > 0 else 0.0
+        w_max = float(np.max(w)) if n > 0 else 1.0
+
+        if abs(w_max - w_min) < 1e-8:
+            alphas = np.ones_like(w) * ((alpha_min + alpha_max) / 2.0)
+        else:
+            w01 = (w - w_min) / (w_max - w_min)
+            alphas = alpha_min + w01 * (alpha_max - alpha_min)
+
+        alphas = np.clip(alphas, alpha_min, alpha_max).astype(np.float32)
+    # ------------------------------------------
+
+    # Draw transitions
+    for i in range(n):
+        if terminals[i]:
+            s = obs[i] - 0.5
+            e = s + actions[i]
+        else:
+            s = obs[i] - 0.5
+            e = next_obs[i] - 0.5
+
+        a = float(alphas[i])
+        ax.plot([s[1] + 0.5, e[1] + 0.5], [s[0] + 0.5, e[0] + 0.5],
+                color='green', linewidth=2, alpha=a)
+        ax.annotate('', xy=(e[1] + 0.5, e[0] + 0.5), xytext=(s[1] + 0.5, s[0] + 0.5),
+                    arrowprops=dict(arrowstyle='->', color='green', shrinkA=0, shrinkB=0,
+                                    linewidth=2, alpha=a))
+
+    # optional: draw given trajectories
+    if trajectories is not None:
+        for trajectory in trajectories:
+            traj_points = np.array(trajectory) - 0.5
+            ax.plot(traj_points[:, 1] + 0.5, traj_points[:, 0] + 0.5, color='blue', linewidth=1)
+            for j in range(len(traj_points) - 1):
+                ax.annotate('', xy=(traj_points[j+1, 1] + 0.5, traj_points[j+1, 0] + 0.5),
+                            xytext=(traj_points[j, 1] + 0.5, traj_points[j, 0] + 0.5),
+                            arrowprops=dict(arrowstyle='->', color='blue', shrinkA=0, shrinkB=0, linewidth=1))
+
+    # grid
+    ax.set_xticks(np.arange(0, self._walls.shape[1], 1))
+    ax.set_yticks(np.arange(0, self._walls.shape[0], 1))
+    ax.grid(which='both', color='gray', linestyle='-', linewidth=0.5)
+
+    ax.set_xticklabels([])
+    ax.set_yticklabels([])
+    ax.set_xlim(0, self._walls.shape[1])
+    ax.set_ylim(0, self._walls.shape[0])
+    ax.set_aspect('equal')
+    plt.tight_layout(pad=0)
+
+    fig.canvas.draw()
+
+    img_array = np.frombuffer(fig.canvas.tostring_rgb(), dtype='uint8')
+    img_array = img_array.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+    img_array = np.flipud(img_array)
+
+    if save_path is not None:
+        img = Image.fromarray(img_array)
+        img.save(save_path)
+
+    plt.close(fig)
+    return img_array
+
+
 def get_env_frame_with_selected_traj_plt_val_num(self, start=None, goal=None, obs=None, next_obs=None, terminals=None, trajectories=None, values=None, save_path=None):
     
     if start is None:

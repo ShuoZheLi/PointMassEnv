@@ -281,7 +281,7 @@ if __name__ == '__main__':
     start_pos = [[2.5,14.5]]
     goal = [[14.5,2.5]]
 
-    env = PointMassEnv(start=np.array([2.5, 14.5], dtype=np.float32), 
+    env = PointMassEnv(start=np.array([2.5, 2.5], dtype=np.float32), 
                                 goal=np.array([14.5, 2.5], dtype=np.float32), 
                                 goal_radius=0.8,
                                 # env_name="EmptyRoom",
@@ -375,8 +375,8 @@ if __name__ == '__main__':
     for key in dataset.keys():
         dataset[key] = np.array(dataset[key])
     # use numpy save the dataset
-    with open('hand_dataset.npy', 'wb') as f:
-        pickle.dump(dataset, f)
+    # with open('mislead_hand_dataset.npy', 'wb') as f:
+    #     pickle.dump(dataset, f)
 
     # Quit Pygame
     pygame.quit()
